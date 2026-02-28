@@ -140,5 +140,12 @@ process.on("unhandledRejection", (err) => {
   console.error("❌ Unhandled rejection:", err);
 });
 
+
+// Keep-alive server for Render
+const http = require("http");
+http.createServer((req, res) => res.end("Bot is running!")).listen(process.env.PORT || 3000, () => {
+  console.log(`🌐 Keep-alive server on port ${process.env.PORT || 3000}`);
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 client.login(process.env.DISCORD_TOKEN);

@@ -1,113 +1,121 @@
-const Database = require("better-sqlite3");
-const path = require("path");
+const { Pool } = require("pg");
 
-const db = new Database(path.join(__dirname, "../sentiment.db"));
+// ─── Connection Pool ──────────────────────────────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }, // required for Render PostgreSQL
+});
 
-// Enable WAL mode for better performance
-db.pragma("journal_mode = WAL");
+// ─── Initialize Tables ────────────────────────────────────────────────────────
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sentiment (
+      id           SERIAL PRIMARY KEY,
+      user_id      TEXT        NOT NULL,
+      username     TEXT        NOT NULL,
+      channel_id   TEXT        NOT NULL,
+      channel_name TEXT        NOT NULL,
+      score        REAL        NOT NULL,
+      label        TEXT        NOT NULL,
+      timestamp    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-// Create tables
-db.exec(`
-  CREATE TABLE IF NOT EXISTS sentiment (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id     TEXT NOT NULL,
-    username    TEXT NOT NULL,
-    channel_id  TEXT NOT NULL,
-    channel_name TEXT NOT NULL,
-    score       REAL NOT NULL,
-    label       TEXT NOT NULL,
-    timestamp   TEXT NOT NULL
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_timestamp ON sentiment(timestamp);
-  CREATE INDEX IF NOT EXISTS idx_channel   ON sentiment(channel_id);
-  CREATE INDEX IF NOT EXISTS idx_label     ON sentiment(label);
-`);
-
-// ─── Writes ────────────────────────────────────────────────────────────────
-
-const insertStmt = db.prepare(`
-  INSERT INTO sentiment (user_id, username, channel_id, channel_name, score, label, timestamp)
-  VALUES (@user_id, @username, @channel_id, @channel_name, @score, @label, @timestamp)
-`);
-
-function insertSentiment(data) {
-  insertStmt.run({ ...data, timestamp: new Date().toISOString() });
+    CREATE INDEX IF NOT EXISTS idx_timestamp ON sentiment(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_channel   ON sentiment(channel_id);
+    CREATE INDEX IF NOT EXISTS idx_label     ON sentiment(label);
+  `);
+  console.log("✅ PostgreSQL database initialized.");
 }
 
-// ─── Reads ─────────────────────────────────────────────────────────────────
+// ─── Writes ───────────────────────────────────────────────────────────────────
+
+async function insertSentiment({ user_id, username, channel_id, channel_name, score, label }) {
+  await pool.query(
+    `INSERT INTO sentiment (user_id, username, channel_id, channel_name, score, label)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [user_id, username, channel_id, channel_name, score, label]
+  );
+}
+
+// ─── Reads ────────────────────────────────────────────────────────────────────
 
 /** Overall label breakdown for the last N days */
-function getSummary(days = 1) {
-  return db.prepare(`
+async function getSummary(days = 1) {
+  const { rows } = await pool.query(`
     SELECT
       label,
-      COUNT(*)       AS count,
-      AVG(score)     AS avg_score
+      COUNT(*)::int        AS count,
+      AVG(score)::float    AS avg_score
     FROM sentiment
-    WHERE timestamp >= datetime('now', '-${days} days')
+    WHERE timestamp >= NOW() - INTERVAL '${days} days'
     GROUP BY label
     ORDER BY count DESC
-  `).all();
+  `);
+  return rows;
 }
 
 /** Daily average scores for the last N days */
-function getTrend(days = 7) {
-  return db.prepare(`
+async function getTrend(days = 7) {
+  const { rows } = await pool.query(`
     SELECT
-      DATE(timestamp)  AS date,
-      AVG(score)       AS avg_score,
-      COUNT(*)         AS message_count
+      DATE(timestamp)       AS date,
+      AVG(score)::float     AS avg_score,
+      COUNT(*)::int         AS message_count
     FROM sentiment
-    WHERE timestamp >= datetime('now', '-${days} days')
+    WHERE timestamp >= NOW() - INTERVAL '${days} days'
     GROUP BY DATE(timestamp)
     ORDER BY date ASC
-  `).all();
+  `);
+  return rows;
 }
 
 /** Per-channel sentiment for the last N days */
-function getChannelBreakdown(days = 1) {
-  return db.prepare(`
+async function getChannelBreakdown(days = 1) {
+  const { rows } = await pool.query(`
     SELECT
       channel_name,
-      AVG(score)   AS avg_score,
-      COUNT(*)     AS message_count
+      AVG(score)::float  AS avg_score,
+      COUNT(*)::int      AS message_count
     FROM sentiment
-    WHERE timestamp >= datetime('now', '-${days} days')
+    WHERE timestamp >= NOW() - INTERVAL '${days} days'
     GROUP BY channel_name
     ORDER BY message_count DESC
     LIMIT 10
-  `).all();
+  `);
+  return rows;
 }
 
-/** Most active positive and negative users in the last N days */
-function getTopUsers(days = 1) {
-  return db.prepare(`
+/** Most active users with sentiment breakdown for the last N days */
+async function getTopUsers(days = 1) {
+  const { rows } = await pool.query(`
     SELECT
       username,
-      AVG(score)   AS avg_score,
-      COUNT(*)     AS message_count,
-      SUM(CASE WHEN label = 'positive' THEN 1 ELSE 0 END) AS positive_count,
-      SUM(CASE WHEN label = 'negative' THEN 1 ELSE 0 END) AS negative_count
+      AVG(score)::float  AS avg_score,
+      COUNT(*)::int      AS message_count,
+      SUM(CASE WHEN label = 'positive' THEN 1 ELSE 0 END)::int AS positive_count,
+      SUM(CASE WHEN label = 'negative' THEN 1 ELSE 0 END)::int AS negative_count
     FROM sentiment
-    WHERE timestamp >= datetime('now', '-${days} days')
-    GROUP BY user_id
-    HAVING message_count >= 3
+    WHERE timestamp >= NOW() - INTERVAL '${days} days'
+    GROUP BY user_id, username
+    HAVING COUNT(*) >= 3
     ORDER BY avg_score DESC
     LIMIT 5
-  `).all();
+  `);
+  return rows;
 }
 
-/** Total messages tracked today */
-function getTodayCount() {
-  return db.prepare(`
-    SELECT COUNT(*) AS count
+/** Total messages tracked in the last 24 hours */
+async function getTodayCount() {
+  const { rows } = await pool.query(`
+    SELECT COUNT(*)::int AS count
     FROM sentiment
-    WHERE timestamp >= datetime('now', '-1 days')
-  `).get();
+    WHERE timestamp >= NOW() - INTERVAL '1 days'
+  `);
+  return rows[0];
 }
 
 module.exports = {
+  initDB,
   insertSentiment,
   getSummary,
   getTrend,

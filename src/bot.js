@@ -1,4 +1,9 @@
-require("dotenv").config();
+// require("dotenv").config();
+
+// Only load .env file in local development
+if (process.env.NODE_ENV !== "production") {
+  require("dotenv").config();
+}
 
 const {
   Client,

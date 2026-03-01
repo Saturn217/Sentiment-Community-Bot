@@ -1,5 +1,3 @@
-// require("dotenv").config();
-
 // Only load .env file in local development
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();
@@ -12,22 +10,24 @@ const {
   Routes,
   Collection,
 } = require("discord.js");
-const cron = require("node-cron");
+const http                 = require("http");
+const cron                 = require("node-cron");
 const { analyzeSentiment } = require("./sentiment");
-const { insertSentiment } = require("./database");
-const { sendDailyReport } = require("./reporter");
-const commands = require("./commands");
+const { initDB, insertSentiment } = require("./database");
+const { sendDailyReport }  = require("./reporter");
+const commands             = require("./commands");
 
-// ─── Validation ───────────────────────────────────────────────────────────────
-const REQUIRED_ENV = ["DISCORD_TOKEN", "CLIENT_ID", "GUILD_ID", "REPORT_CHANNEL_ID"];
-REQUIRED_ENV.forEach((key) => {
-  if (!process.env[key]) {
-    console.error(`❌ Missing required environment variable: ${key}`);
-    process.exit(1);
-  }
+// ─── Debug ────────────────────────────────────────────────────────────────────
+console.log("ENV CHECK:", {
+  hasToken:    !!process.env.DISCORD_TOKEN,
+  hasClientId: !!process.env.CLIENT_ID,
+  hasGuildId:  !!process.env.GUILD_ID,
+  hasChannel:  !!process.env.REPORT_CHANNEL_ID,
+  hasDatabase: !!process.env.DATABASE_URL,
+  nodeEnv:     process.env.NODE_ENV,
 });
 
-// Parse optional ignored channels
+// ─── Parse optional ignored channels ─────────────────────────────────────────
 const IGNORED_CHANNELS = process.env.IGNORED_CHANNELS
   ? process.env.IGNORED_CHANNELS.split(",").map((id) => id.trim())
   : [];
@@ -66,8 +66,7 @@ function scheduleDailyReport() {
 
   if (!cron.validate(cronExpression)) {
     console.error(`❌ Invalid REPORT_CRON expression: "${cronExpression}"`);
-    console.error('   Use a valid cron format, e.g. "0 9 * * *" for 9:00 AM daily.');
-    process.exit(1);
+    return;
   }
 
   cron.schedule(cronExpression, async () => {
@@ -88,7 +87,6 @@ client.once("ready", async () => {
     await initDB();
   } catch (err) {
     console.error("❌ Database connection failed:", err.message);
-    console.error("❌ Full error:", err);
   }
 
   try {
@@ -101,35 +99,34 @@ client.once("ready", async () => {
 });
 
 // ── Track message sentiment ───────────────────────────────────────────────────
-client.on("messageCreate", (message) => {
-  // Skip bots
+client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-
-  // Skip ignored channels
   if (IGNORED_CHANNELS.includes(message.channel.id)) return;
 
-  // Skip very short messages (too little signal)
   const text = message.content.trim();
   if (text.length < 5) return;
 
-  // Skip messages that are only mentions, emojis, or URLs
   const stripped = text
-    .replace(/<@!?\d+>/g, "")    // mentions
-    .replace(/<:\w+:\d+>/g, "")  // custom emojis
-    .replace(/https?:\/\/\S+/g, "") // URLs
+    .replace(/<@!?\d+>/g, "")
+    .replace(/<:\w+:\d+>/g, "")
+    .replace(/https?:\/\/\S+/g, "")
     .trim();
   if (stripped.length < 5) return;
 
   const { score, label } = analyzeSentiment(stripped);
 
-  insertSentiment({
-    user_id: message.author.id,
-    username: message.author.username,
-    channel_id: message.channel.id,
-    channel_name: message.channel.name || "unknown",
-    score,
-    label,
-  });
+  try {
+    await insertSentiment({
+      user_id:      message.author.id,
+      username:     message.author.username,
+      channel_id:   message.channel.id,
+      channel_name: message.channel.name || "unknown",
+      score,
+      label,
+    });
+  } catch (err) {
+    console.error("❌ Failed to insert sentiment:", err.message);
+  }
 });
 
 // ── Handle slash commands ─────────────────────────────────────────────────────
@@ -151,30 +148,19 @@ client.on("interactionCreate", async (interaction) => {
 
 // ─── Error Handling ───────────────────────────────────────────────────────────
 client.on("error", (err) => console.error("❌ Client error:", err.message));
-client.on("warn", (msg) => console.warn("⚠️  Client warning:", msg));
+client.on("warn",  (msg) => console.warn("⚠️  Client warning:", msg));
 
 process.on("unhandledRejection", (err) => {
   console.error("❌ Unhandled rejection:", err);
 });
 
-
-// Temporary debug - remove after fixing
-console.log("ENV CHECK:", {
-  hasToken: !!process.env.DISCORD_TOKEN,
-  hasClientId: !!process.env.CLIENT_ID,
-  hasGuildId: !!process.env.GUILD_ID,
-  hasChannel: !!process.env.REPORT_CHANNEL_ID,
-  hasDatabase: !!process.env.DATABASE_URL,
-  nodeEnv: process.env.NODE_ENV,
-});
-
-// Keep-alive server for Render
-const http = require("http");
+// ─── Keep-Alive HTTP Server for Render ───────────────────────────────────────
 http.createServer((req, res) => res.end("Bot is running!")).listen(process.env.PORT || 3000, () => {
   console.log(`🌐 Keep-alive server on port ${process.env.PORT || 3000}`);
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
+// ─── Start Bot ────────────────────────────────────────────────────────────────
+console.log("🔑 Attempting Discord login...");
 client.login(process.env.DISCORD_TOKEN)
   .then(() => console.log("🔑 Login successful"))
-  .catch(err => console.error("❌ Login failed:", err.message));
+  .catch((err) => console.error("❌ Login failed:", err.message));

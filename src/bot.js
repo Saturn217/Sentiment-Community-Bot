@@ -84,7 +84,19 @@ client.once("ready", async () => {
   console.log(`📊 Tracking sentiment in guild: ${process.env.GUILD_ID}`);
   console.log(`📬 Reports channel: ${process.env.REPORT_CHANNEL_ID}\n`);
 
-  await registerCommands();
+  try {
+    await initDB();
+  } catch (err) {
+    console.error("❌ Database connection failed:", err.message);
+    console.error("❌ Full error:", err);
+  }
+
+  try {
+    await registerCommands();
+  } catch (err) {
+    console.error("❌ Command registration failed:", err.message);
+  }
+
   scheduleDailyReport();
 });
 
@@ -163,4 +175,6 @@ http.createServer((req, res) => res.end("Bot is running!")).listen(process.env.P
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => console.log("🔑 Login successful"))
+  .catch(err => console.error("❌ Login failed:", err.message));

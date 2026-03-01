@@ -12,11 +12,11 @@ const {
   Routes,
   Collection,
 } = require("discord.js");
-const cron                 = require("node-cron");
+const cron = require("node-cron");
 const { analyzeSentiment } = require("./sentiment");
-const { insertSentiment }  = require("./database");
-const { sendDailyReport }  = require("./reporter");
-const commands             = require("./commands");
+const { insertSentiment } = require("./database");
+const { sendDailyReport } = require("./reporter");
+const commands = require("./commands");
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 const REQUIRED_ENV = ["DISCORD_TOKEN", "CLIENT_ID", "GUILD_ID", "REPORT_CHANNEL_ID"];
@@ -111,9 +111,9 @@ client.on("messageCreate", (message) => {
   const { score, label } = analyzeSentiment(stripped);
 
   insertSentiment({
-    user_id:      message.author.id,
-    username:     message.author.username,
-    channel_id:   message.channel.id,
+    user_id: message.author.id,
+    username: message.author.username,
+    channel_id: message.channel.id,
     channel_name: message.channel.name || "unknown",
     score,
     label,
@@ -138,13 +138,23 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ─── Error Handling ───────────────────────────────────────────────────────────
-client.on("error",   (err) => console.error("❌ Client error:",   err.message));
-client.on("warn",    (msg) => console.warn ("⚠️  Client warning:", msg));
+client.on("error", (err) => console.error("❌ Client error:", err.message));
+client.on("warn", (msg) => console.warn("⚠️  Client warning:", msg));
 
 process.on("unhandledRejection", (err) => {
   console.error("❌ Unhandled rejection:", err);
 });
 
+
+// Temporary debug - remove after fixing
+console.log("ENV CHECK:", {
+  hasToken: !!process.env.DISCORD_TOKEN,
+  hasClientId: !!process.env.CLIENT_ID,
+  hasGuildId: !!process.env.GUILD_ID,
+  hasChannel: !!process.env.REPORT_CHANNEL_ID,
+  hasDatabase: !!process.env.DATABASE_URL,
+  nodeEnv: process.env.NODE_ENV,
+});
 
 // Keep-alive server for Render
 const http = require("http");

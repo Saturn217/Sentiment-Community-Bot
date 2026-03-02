@@ -4,12 +4,12 @@ const { getSummary, getTrend, getChannelBreakdown, getTopUsers, getTodayCount } 
 /**
  * Builds a rich Discord embed for the daily sentiment report.
  */
-function buildDailyReport() {
-  const summary       = getSummary(1);
-  const trend         = getTrend(7);
-  const channels      = getChannelBreakdown(1);
-  const topUsers      = getTopUsers(1);
-  const { count }     = getTodayCount();
+async function buildDailyReport() {
+  const summary    = await getSummary(1);
+  const trend      = await getTrend(7);
+  const channels   = await getChannelBreakdown(1);
+  const topUsers   = await getTopUsers(1);
+  const { count }  = await getTodayCount();
 
   // ── Totals ────────────────────────────────────────────────────────────────
   let positive = 0, negative = 0, neutral = 0, totalScore = 0;
@@ -23,17 +23,17 @@ function buildDailyReport() {
 
   // ── Overall mood ──────────────────────────────────────────────────────────
   let moodEmoji, moodLabel, embedColor;
-  if (overallScore > 0.1)       { moodEmoji = "😄"; moodLabel = "Very Positive"; embedColor = 0x2ecc71; }
-  else if (overallScore > 0.02) { moodEmoji = "🙂"; moodLabel = "Positive";      embedColor = 0x27ae60; }
-  else if (overallScore < -0.1) { moodEmoji = "😠"; moodLabel = "Very Negative"; embedColor = 0xe74c3c; }
-  else if (overallScore < -0.02){ moodEmoji = "😕"; moodLabel = "Negative";      embedColor = 0xc0392b; }
-  else                          { moodEmoji = "😐"; moodLabel = "Neutral";        embedColor = 0xf39c12; }
+  if (overallScore > 0.1)        { moodEmoji = "😄"; moodLabel = "Very Positive"; embedColor = 0x2ecc71; }
+  else if (overallScore > 0.02)  { moodEmoji = "🙂"; moodLabel = "Positive";      embedColor = 0x27ae60; }
+  else if (overallScore < -0.1)  { moodEmoji = "😠"; moodLabel = "Very Negative"; embedColor = 0xe74c3c; }
+  else if (overallScore < -0.02) { moodEmoji = "😕"; moodLabel = "Negative";      embedColor = 0xc0392b; }
+  else                           { moodEmoji = "😐"; moodLabel = "Neutral";        embedColor = 0xf39c12; }
 
   // ── Sentiment breakdown bar ───────────────────────────────────────────────
   function buildBar(value, total, emoji) {
     if (!total) return "";
     const pct    = Math.round((value / total) * 100);
-    const filled = Math.round(pct / 5); // 20 blocks max
+    const filled = Math.round(pct / 5);
     return `${emoji} ${"█".repeat(filled)}${"░".repeat(20 - filled)} ${pct}% (${value})`;
   }
 
@@ -50,9 +50,7 @@ function buildDailyReport() {
   if (trend.length > 0) {
     trend.forEach(({ date, avg_score, message_count }) => {
       const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
-      const bar   = avg_score > 0
-        ? `+${avg_score.toFixed(3)}`
-        : avg_score.toFixed(3);
+      const bar   = avg_score > 0 ? `+${avg_score.toFixed(3)}` : avg_score.toFixed(3);
       trendText += `${arrow} \`${date}\` — Score: \`${bar}\` · ${message_count} msgs\n`;
     });
   } else {
@@ -121,7 +119,6 @@ function buildDailyReport() {
 
 /**
  * Send the daily report to the configured channel.
- * @param {import('discord.js').Client} client
  */
 async function sendDailyReport(client) {
   const channelId = process.env.REPORT_CHANNEL_ID;
@@ -137,7 +134,7 @@ async function sendDailyReport(client) {
       return;
     }
 
-    const embed = buildDailyReport();
+    const embed = await buildDailyReport();
     await channel.send({ embeds: [embed] });
     console.log(`✅ Daily report sent to #${channel.name}`);
   } catch (err) {

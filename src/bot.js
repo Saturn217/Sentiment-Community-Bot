@@ -1,3 +1,13 @@
+
+process.on("uncaughtException", (err) => {
+  console.error("❌ Uncaught Exception:", err.message);
+  console.error(err.stack);
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("❌ Unhandled Rejection:", err);
+});
+
 // Only load .env file in local development
 if (process.env.NODE_ENV !== "production") {
   require("dotenv").config();

@@ -87,7 +87,7 @@ async function buildDailyReport() {
   // ── Build embed ───────────────────────────────────────────────────────────
   const embed = new EmbedBuilder()
     .setTitle(`${moodEmoji} Daily Sentiment Report — ${moodLabel}`)
-    .setDescription(`**${today}**\nOverall community score: \`${overallScore.toFixed(3)}\` · ${count} messages analyzed`)
+    .setDescription(`**${today}**\nOverall community score: \`${overallScore.toFixed(3)}\` · ${count || 0} messages analyzed`)
     .setColor(embedColor)
     .addFields(
       {

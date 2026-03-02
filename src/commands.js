@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require("discord.js");
 const { getSummary, getTrend, getChannelBreakdown } = require("./database");
 const { buildDailyReport } = require("./reporter");
 
@@ -20,11 +20,11 @@ const commands = [
     async execute(interaction) {
       await interaction.deferReply();
       const days    = interaction.options.getInteger("days") || 7;
-      const summary = getSummary(days);
-      const trend   = getTrend(days);
+      const summary = await getSummary(days);
+      const trend   = await getTrend(days);
 
       if (!summary.length) {
-        return interaction.editReply("📭 No sentiment data found for that period yet.");
+        return interaction.editReply("📭 No sentiment data found for that period yet. Send some messages first!");
       }
 
       let totalMsgs = 0;
@@ -49,9 +49,10 @@ const commands = [
       const embed = new EmbedBuilder()
         .setTitle(`📊 Sentiment Summary — Last ${days} Day${days > 1 ? "s" : ""}`)
         .setColor(overall > 0.05 ? 0x2ecc71 : overall < -0.05 ? 0xe74c3c : 0xf39c12)
+        .setDescription(`**${totalMsgs}** messages analyzed over the last **${days}** day${days > 1 ? "s" : ""}`)
         .addFields(
-          { name: "Breakdown", value: summaryText,            inline: false },
-          { name: "Trend",     value: trendText || "No data", inline: false }
+          { name: "Breakdown", value: summaryText || "No data",            inline: false },
+          { name: "Trend",     value: trendText   || "Not enough data yet", inline: false }
         )
         .setFooter({ text: `Total messages analyzed: ${totalMsgs}` })
         .setTimestamp();
@@ -77,10 +78,10 @@ const commands = [
     async execute(interaction) {
       await interaction.deferReply();
       const days      = interaction.options.getInteger("days") || 1;
-      const breakdown = getChannelBreakdown(days);
+      const breakdown = await getChannelBreakdown(days);
 
       if (!breakdown.length) {
-        return interaction.editReply("📭 No channel data available yet.");
+        return interaction.editReply("📭 No channel data available yet. Send some messages first!");
       }
 
       let text = "";
@@ -106,8 +107,8 @@ const commands = [
       .setDescription("Manually trigger today's full sentiment report"),
 
     async execute(interaction) {
-      await interaction.deferReply({ ephemeral: true });
-      const embed = buildDailyReport();
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const embed = await buildDailyReport();
       await interaction.channel.send({ embeds: [embed] });
       return interaction.editReply("✅ Report sent!");
     },

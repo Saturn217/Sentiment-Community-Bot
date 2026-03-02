@@ -78,7 +78,7 @@ function scheduleDailyReport() {
 }
 
 // ─── Events ───────────────────────────────────────────────────────────────────
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log(`\n🤖 Logged in as ${client.user.tag}`);
   console.log(`📊 Tracking sentiment in guild: ${process.env.GUILD_ID}`);
   console.log(`📬 Reports channel: ${process.env.REPORT_CHANNEL_ID}\n`);

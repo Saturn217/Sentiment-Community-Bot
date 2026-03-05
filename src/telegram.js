@@ -188,7 +188,7 @@ async function handleCommand(msg) {
 
   } else if (text.startsWith("/start") || text.startsWith("/help")) {
     await sendMessage(chatId,
-      `👋 *Otterly Sentiment Bot*\n\n` +
+      `👋 *Orderly Community Report Bot*\n\n` +
       `I track your Discord community sentiment and report it here.\n\n` +
       `*Commands:*\n` +
       `/report — Today's full sentiment report\n` +

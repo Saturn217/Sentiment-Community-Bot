@@ -8,6 +8,7 @@ const pool = new Pool({
 
 // ─── Initialize Tables ────────────────────────────────────────────────────────
 async function initDB() {
+  // Create table if it doesn't exist
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sentiment (
       id           SERIAL PRIMARY KEY,
@@ -17,21 +18,28 @@ async function initDB() {
       channel_name TEXT        NOT NULL,
       score        REAL        NOT NULL,
       label        TEXT        NOT NULL,
-      category     TEXT        NOT NULL DEFAULT 'general',
-      message_text TEXT,
       timestamp    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_timestamp ON sentiment(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_channel   ON sentiment(channel_id);
-    CREATE INDEX IF NOT EXISTS idx_label     ON sentiment(label);
-    CREATE INDEX IF NOT EXISTS idx_category  ON sentiment(category);
+    )
   `);
 
-  // Migrate existing table — add columns if they don't exist yet
-  await pool.query(`ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS category     TEXT NOT NULL DEFAULT 'general'`).catch(() => {});
-  await pool.query(`ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS message_text TEXT`).catch(() => {});
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_category ON sentiment(category)`).catch(() => {});
+  // Run each migration separately with logging
+  const migrations = [
+    `ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS category     TEXT NOT NULL DEFAULT 'general'`,
+    `ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS message_text TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_timestamp ON sentiment(timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_channel   ON sentiment(channel_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_label     ON sentiment(label)`,
+    `CREATE INDEX IF NOT EXISTS idx_category  ON sentiment(category)`,
+  ];
+
+  for (const sql of migrations) {
+    try {
+      await pool.query(sql);
+      console.log(`✅ Migration OK: ${sql.slice(0, 60)}...`);
+    } catch (err) {
+      console.error(`❌ Migration failed: ${sql.slice(0, 60)}\n   Error: ${err.message}`);
+    }
+  }
 
   console.log("✅ PostgreSQL database initialized.");
 }

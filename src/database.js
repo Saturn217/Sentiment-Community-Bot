@@ -28,11 +28,10 @@ async function initDB() {
     CREATE INDEX IF NOT EXISTS idx_category  ON sentiment(category);
   `);
 
-  // Add columns if upgrading from old schema
-  await pool.query(`
-    ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS category     TEXT DEFAULT 'general';
-    ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS message_text TEXT;
-  `).catch(() => {});
+  // Migrate existing table — add columns if they don't exist yet
+  await pool.query(`ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS category     TEXT NOT NULL DEFAULT 'general'`).catch(() => {});
+  await pool.query(`ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS message_text TEXT`).catch(() => {});
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_category ON sentiment(category)`).catch(() => {});
 
   console.log("✅ PostgreSQL database initialized.");
 }

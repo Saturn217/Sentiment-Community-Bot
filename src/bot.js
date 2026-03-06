@@ -27,6 +27,8 @@ console.log("ENV CHECK:", {
   hasChannel:  !!process.env.REPORT_CHANNEL_ID,
   hasDatabase: !!process.env.DATABASE_URL,
   hasTelegram: !!process.env.TELEGRAM_TOKEN,
+  hasTgChatId: !!process.env.TELEGRAM_CHAT_ID,
+  tgChatId:    process.env.TELEGRAM_CHAT_ID, // log actual value
   nodeEnv:     process.env.NODE_ENV,
 });
 

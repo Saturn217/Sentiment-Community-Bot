@@ -143,7 +143,7 @@ async function poll() {
   try {
     const res = await tgRequest("getUpdates", {
       offset,
-      timeout:         30,
+      timeout:         25, // slightly under 30s to avoid socket hang up
       allowed_updates: ["message"],
     });
 
@@ -156,10 +156,20 @@ async function poll() {
       }
     }
   } catch (err) {
-    console.error("❌ Telegram poll error:", err.message);
-    await new Promise((r) => setTimeout(r, 5000)); // wait 5s before retrying
+    // Socket hang up and ECONNRESET are normal timeout events — don't log them
+    const isNormalTimeout = err.message?.includes("socket hang up") ||
+                            err.message?.includes("ECONNRESET") ||
+                            err.message?.includes("ETIMEDOUT");
+
+    if (!isNormalTimeout) {
+      console.error("❌ Telegram poll error:", err.message);
+    }
+
+    // Wait before retrying on any error
+    await new Promise((r) => setTimeout(r, 3000));
   }
 
+  // Poll again
   setImmediate(poll);
 }
 

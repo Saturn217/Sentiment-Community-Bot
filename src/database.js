@@ -12,6 +12,7 @@ async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sentiment (
       id           SERIAL PRIMARY KEY,
+      message_id   TEXT,
       user_id      TEXT        NOT NULL,
       username     TEXT        NOT NULL,
       channel_id   TEXT        NOT NULL,
@@ -26,10 +27,12 @@ async function initDB() {
   const migrations = [
     `ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS category     TEXT NOT NULL DEFAULT 'general'`,
     `ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS message_text TEXT`,
-    `CREATE INDEX IF NOT EXISTS idx_timestamp ON sentiment(timestamp)`,
-    `CREATE INDEX IF NOT EXISTS idx_channel   ON sentiment(channel_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_label     ON sentiment(label)`,
-    `CREATE INDEX IF NOT EXISTS idx_category  ON sentiment(category)`,
+    `ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS message_id   TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_timestamp  ON sentiment(timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_channel    ON sentiment(channel_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_label      ON sentiment(label)`,
+    `CREATE INDEX IF NOT EXISTS idx_category   ON sentiment(category)`,
+    `CREATE INDEX IF NOT EXISTS idx_message_id ON sentiment(message_id)`,
   ];
 
   for (const sql of migrations) {
@@ -46,12 +49,21 @@ async function initDB() {
 
 // ─── Writes ───────────────────────────────────────────────────────────────────
 
-async function insertSentiment({ user_id, username, channel_id, channel_name, score, label, category, message_text }) {
+async function insertSentiment({ message_id, user_id, username, channel_id, channel_name, score, label, category, message_text }) {
   await pool.query(
-    `INSERT INTO sentiment (user_id, username, channel_id, channel_name, score, label, category, message_text)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [user_id, username, channel_id, channel_name, score, label, category || "general", message_text || null]
+    `INSERT INTO sentiment (message_id, user_id, username, channel_id, channel_name, score, label, category, message_text)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [message_id || null, user_id, username, channel_id, channel_name, score, label, category || "general", message_text || null]
   );
+}
+
+/** Delete a message from sentiment tracking by its Discord message ID */
+async function deleteByMessageId(message_id) {
+  const result = await pool.query(
+    `DELETE FROM sentiment WHERE message_id = $1 RETURNING id, category, timestamp`,
+    [message_id]
+  );
+  return result.rows[0] || null;
 }
 
 // ─── Sentiment Reads ──────────────────────────────────────────────────────────
@@ -201,6 +213,7 @@ async function getCategoryTrend(days = 7) {
 module.exports = {
   initDB,
   insertSentiment,
+  deleteByMessageId,
   getSummary,
   getTrend,
   getChannelBreakdown,

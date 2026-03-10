@@ -14,7 +14,7 @@ const http                        = require("http");
 const cron                        = require("node-cron");
 const { analyzeSentiment }        = require("./sentiment");
 const { classifyMessage }         = require("./classifier");
-const { initDB, insertSentiment } = require("./database");
+const { initDB, insertSentiment, deleteByMessageId } = require("./database");
 const { sendDailyReport }         = require("./reporter");
 const { startTelegramBot, sendTelegramDailyReport } = require("./telegram");
 const commands                    = require("./commands");
@@ -43,6 +43,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMessageReactions,
   ],
 });
 
@@ -128,6 +129,7 @@ client.on("messageCreate", async (message) => {
 
   try {
     await insertSentiment({
+      message_id:   message.id,
       user_id:      message.author.id,
       username:     message.author.username,
       channel_id:   message.channel.id,
@@ -135,10 +137,31 @@ client.on("messageCreate", async (message) => {
       score,
       label,
       category,
-      message_text: stripped.slice(0, 300), // store up to 300 chars
+      message_text: stripped.slice(0, 300),
     });
   } catch (err) {
     console.error("❌ Failed to insert sentiment:", err.message);
+  }
+});
+
+// ── Handle deleted messages ───────────────────────────────────────────────────
+const MIN_MESSAGE_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
+client.on("messageDelete", async (message) => {
+  try {
+    const deletedAt  = Date.now();
+    const createdAt  = message.createdTimestamp;
+    const ageMs      = deletedAt - createdAt;
+
+    // If message was deleted within 5 minutes, remove from database
+    if (ageMs < MIN_MESSAGE_AGE_MS) {
+      const removed = await deleteByMessageId(message.id);
+      if (removed) {
+        console.log(`🗑️  Removed ${removed.category} message deleted after ${Math.round(ageMs / 1000)}s`);
+      }
+    }
+  } catch (err) {
+    console.error("❌ Failed to handle message delete:", err.message);
   }
 });
 

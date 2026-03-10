@@ -5,7 +5,7 @@ const { analyzeSentiment } = require("./sentiment");
 const { classifyMessage }  = require("./classifier");
 
 const TG_TOKEN          = process.env.TELEGRAM_TOKEN;
-const TG_REPORT_CHAT_ID = process.env.TELEGRAM_REPORT_CHAT_ID 
+const TG_REPORT_CHAT_ID = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
 
 // Groups to MONITOR (track sentiment from)
 const TG_MONITOR_1  = process.env.TELEGRAM_CHAT_ID;
@@ -82,6 +82,7 @@ async function trackTelegramMessage(msg) {
       community,
       platform:     "telegram",
     });
+    console.log(`📨 Tracked [${community}] ${label} message from ${msg.from?.username || "unknown"}`);
   } catch (err) {
     console.error("❌ Failed to track Telegram message:", err.message);
   }

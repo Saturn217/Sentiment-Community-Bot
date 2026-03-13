@@ -18,7 +18,7 @@ const CHAT_COMMUNITY_MAP = {
   [TG_MONITOR_1]: COMMUNITY_1,
   [TG_MONITOR_2]: COMMUNITY_2,
 };
-let offset        = 0;
+let offset = 0;
 
 // ─── HTTP Helper ──────────────────────────────────────────────────────────────
 function tgRequest(method, body) {
@@ -212,8 +212,12 @@ async function poll() {
         if (msg.text?.startsWith("/")) {
           await handleCommand(msg);
         } else {
-          // Track non-command messages as sentiment
-          await trackTelegramMessage(msg);
+          // Only track messages from monitored groups, NOT the report chat
+          const msgChatId   = String(msg.chat?.id);
+          const isMonitored = msgChatId === String(TG_MONITOR_1) || msgChatId === String(TG_MONITOR_2);
+          if (isMonitored) {
+            await trackTelegramMessage(msg);
+          }
         }
       }
     }
@@ -259,4 +263,4 @@ function startTelegramBot() {
   poll();
 }
 
-module.exports = { startTelegramBot, sendTelegramDailyReport, trackTelegramMessage };
+module.exports = { startTelegramBot, sendTelegramDailyReport, trackTelegramMessage, sendTelegramMessage: sendMessage };

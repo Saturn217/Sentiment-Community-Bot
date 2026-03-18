@@ -1,12 +1,4 @@
-/**
- * Classifies a message as sentiment + category (issue, feedback, general)
- * and extracts a short summary of what the message is about.
- */
-
-// ─── Keyword Lists ────────────────────────────────────────────────────────────
-
 const ISSUE_KEYWORDS = [
-  // Bug/error signals
   "bug", "error", "broken", "not working", "doesnt work", "doesn't work",
   "cant login", "can't login", "unable to", "failed", "crash", "crashes",
   "crashing", "issue", "problem", "glitch", "freeze", "freezing", "stuck",
@@ -16,7 +8,6 @@ const ISSUE_KEYWORDS = [
 ];
 
 const FEEDBACK_KEYWORDS = [
-  // Suggestions/opinions
   "suggest", "suggestion", "would be nice", "feature request", "please add",
   "can you add", "it would help", "improvement", "improve", "feedback",
   "recommendation", "recommend", "love it", "great job", "well done",
@@ -26,19 +17,36 @@ const FEEDBACK_KEYWORDS = [
   "wishlist", "nice to have", "missing feature", "lacks", "needs",
 ];
 
-/**
- * Classify a message into a category.
- * Returns: "issue" | "feedback" | "general"
- */
+// Custom keywords loaded from DB into memory on startup
+let customIssueKeywords    = [];
+let customFeedbackKeywords = [];
+
+async function loadCustomKeywords() {
+  try {
+    const { getCustomKeywords } = require("./database");
+    const rows = await getCustomKeywords();
+    customIssueKeywords    = rows.filter(r => r.category === "issue").map(r => r.keyword);
+    customFeedbackKeywords = rows.filter(r => r.category === "feedback").map(r => r.keyword);
+    console.log(`📝 Loaded ${customIssueKeywords.length} custom issue keywords, ${customFeedbackKeywords.length} custom feedback keywords`);
+  } catch (err) {
+    console.error("❌ Failed to load custom keywords:", err.message);
+  }
+}
+
 function classifyMessage(text) {
-  const lower = text.toLowerCase();
-
-  const isIssue    = ISSUE_KEYWORDS.some((kw) => lower.includes(kw));
-  const isFeedback = FEEDBACK_KEYWORDS.some((kw) => lower.includes(kw));
-
-  if (isIssue)    return "issue";
-  if (isFeedback) return "feedback";
+  const lower        = text.toLowerCase();
+  const allIssues    = [...ISSUE_KEYWORDS,    ...customIssueKeywords];
+  const allFeedbacks = [...FEEDBACK_KEYWORDS, ...customFeedbackKeywords];
+  if (allIssues.some(kw    => lower.includes(kw))) return "issue";
+  if (allFeedbacks.some(kw => lower.includes(kw))) return "feedback";
   return "general";
 }
 
-module.exports = { classifyMessage };
+function getAllKeywords() {
+  return {
+    issue:    { base: ISSUE_KEYWORDS,    custom: customIssueKeywords    },
+    feedback: { base: FEEDBACK_KEYWORDS, custom: customFeedbackKeywords },
+  };
+}
+
+module.exports = { classifyMessage, loadCustomKeywords, getAllKeywords };

@@ -1,23 +1,26 @@
 const https = require("https");
-const { getSummary, getTrend, getChannelBreakdown, getRecentIssues, getRecentFeedback, insertSentiment } = require("./database");
-const { buildTelegramReport } = require("./reporter");
+const {
+  getSummary, getTrend, getChannelBreakdown, getRecentIssues, getRecentFeedback,
+  getCommunityBreakdown, insertSentiment, deleteByMessageId, cleanOldRecords,
+} = require("./database");
+const { buildTelegramReport, buildWeeklyDigestTelegram } = require("./reporter");
 const { analyzeSentiment } = require("./sentiment");
 const { classifyMessage }  = require("./classifier");
 
 const TG_TOKEN          = process.env.TELEGRAM_TOKEN;
 const TG_REPORT_CHAT_ID = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
 
-// Groups to MONITOR (track sentiment from)
-const TG_MONITOR_1  = process.env.TELEGRAM_CHAT_ID;
-const TG_MONITOR_2  = process.env.TELEGRAM_CHAT_ID_2;
-const COMMUNITY_1   = process.env.TG_COMMUNITY_NAME   || "Orderly Telegram Community";
-const COMMUNITY_2   = process.env.TG_COMMUNITY_NAME_2 || "Orderly Trading Competition";
+// Groups to MONITOR only — never the report chat
+const TG_MONITOR_1 = process.env.TELEGRAM_CHAT_ID;
+const TG_MONITOR_2 = process.env.TELEGRAM_CHAT_ID_2;
+const COMMUNITY_1  = process.env.TG_COMMUNITY_NAME   || "Orderly Telegram Community";
+const COMMUNITY_2  = process.env.TG_COMMUNITY_NAME_2 || "Orderly Trading Competition";
 
-// Map monitored chat IDs to community names
 const CHAT_COMMUNITY_MAP = {
   [TG_MONITOR_1]: COMMUNITY_1,
   [TG_MONITOR_2]: COMMUNITY_2,
 };
+
 let offset = 0;
 
 // ─── HTTP Helper ──────────────────────────────────────────────────────────────
@@ -32,10 +35,8 @@ function tgRequest(method, body) {
     };
     const req = https.request(options, (res) => {
       let raw = "";
-      res.on("data", (chunk) => raw += chunk);
-      res.on("end", () => {
-        try { resolve(JSON.parse(raw)); } catch (e) { reject(e); }
-      });
+      res.on("data", chunk => raw += chunk);
+      res.on("end", () => { try { resolve(JSON.parse(raw)); } catch (e) { reject(e); } });
     });
     req.on("error", reject);
     req.write(data);
@@ -46,12 +47,16 @@ function tgRequest(method, body) {
 async function sendMessage(chat_id, text) {
   try {
     await tgRequest("sendMessage", { chat_id, text, parse_mode: "Markdown" });
-  } catch (err) {
+  } catch {
     await tgRequest("sendMessage", { chat_id, text: text.replace(/[*`_[\]()~>#+=|{}.!-]/g, "\\$&") });
   }
 }
 
-// ─── Track Telegram Messages ──────────────────────────────────────────────────
+// ─── 30-Second Delay Queue ────────────────────────────────────────────────────
+// Hold messages 30s before saving — admin delete in that window = never tracked
+const TRACK_DELAY_MS = 30 * 1000;
+const pendingTgMsgs  = new Map(); // "chatId:messageId" → timeout
+
 async function trackTelegramMessage(msg) {
   if (!msg?.text) return;
   if (msg.text.startsWith("/")) return;
@@ -64,28 +69,34 @@ async function trackTelegramMessage(msg) {
 
   const chatId    = String(msg.chat?.id);
   const community = CHAT_COMMUNITY_MAP[chatId] || `telegram_${chatId}`;
+  const msgKey    = `${chatId}:${msg.message_id}`;
 
   const { score, label } = analyzeSentiment(stripped);
   const category         = classifyMessage(stripped);
 
-  try {
-    await insertSentiment({
-      message_id:   String(msg.message_id),
-      user_id:      String(msg.from?.id || "unknown"),
-      username:     msg.from?.username || msg.from?.first_name || "unknown",
-      channel_id:   chatId,
-      channel_name: msg.chat?.title || community,
-      score,
-      label,
-      category,
-      message_text: stripped.slice(0, 300),
-      community,
-      platform:     "telegram",
-    });
-    console.log(`📨 Tracked [${community}] ${label} message from ${msg.from?.username || "unknown"}`);
-  } catch (err) {
-    console.error("❌ Failed to track Telegram message:", err.message);
-  }
+  const payload = {
+    message_id:   String(msg.message_id),
+    user_id:      String(msg.from?.id || "unknown"),
+    username:     msg.from?.username || msg.from?.first_name || "unknown",
+    channel_id:   chatId,
+    channel_name: msg.chat?.title || community,
+    score, label, category,
+    message_text: stripped.slice(0, 300),
+    community,
+    platform: "telegram",
+  };
+
+  const timeout = setTimeout(async () => {
+    pendingTgMsgs.delete(msgKey);
+    try {
+      await insertSentiment(payload);
+      console.log(`📨 Tracked [${community}] ${label} (${category}) from ${payload.username}`);
+    } catch (err) {
+      console.error("❌ Failed to track Telegram message:", err.message);
+    }
+  }, TRACK_DELAY_MS);
+
+  pendingTgMsgs.set(msgKey, timeout);
 }
 
 // ─── Command Handlers ─────────────────────────────────────────────────────────
@@ -96,15 +107,17 @@ async function handleCommand(msg) {
   try {
     if (text.startsWith("/report")) {
       await sendMessage(chatId, "⏳ Generating combined report...");
-      const report = await buildTelegramReport();
-      await sendMessage(chatId, report);
+      await sendMessage(chatId, await buildTelegramReport());
+
+    } else if (text.startsWith("/weeklyreport")) {
+      await sendMessage(chatId, "⏳ Generating weekly digest...");
+      await sendMessage(chatId, await buildWeeklyDigestTelegram());
 
     } else if (text.startsWith("/sentiment")) {
       const days    = parseInt(text.split(" ")[1]) || 7;
       const summary = await getSummary(days);
       const trend   = await getTrend(days);
-
-      if (!summary.length) return sendMessage(chatId, "📭 No sentiment data yet across any community.");
+      if (!summary.length) return sendMessage(chatId, "📭 No sentiment data yet.");
 
       let totalMsgs = 0, weightedScore = 0, summaryText = "";
       summary.forEach(({ label, count, avg_score }) => {
@@ -112,79 +125,96 @@ async function handleCommand(msg) {
         summaryText += `${emoji} *${label}*: ${count} msgs (avg: \`${avg_score.toFixed(3)}\`)\n`;
         totalMsgs += count; weightedScore += avg_score * count;
       });
-
       let trendText = "";
       trend.slice(-5).forEach(({ date, avg_score, message_count }) => {
         const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
         trendText += `${arrow} \`${date}\` — \`${avg_score > 0 ? "+" : ""}${avg_score.toFixed(3)}\` (${message_count} msgs)\n`;
       });
-
       await sendMessage(chatId,
-        `📊 *Combined Sentiment — Last ${days} Day${days > 1 ? "s" : ""}*\n\n` +
-        `*Breakdown:*\n${summaryText}\n*Trend:*\n${trendText || "Not enough data yet."}`
+        `📊 *Combined Sentiment — Last ${days} Day${days > 1 ? "s" : ""}*\n\n*Breakdown:*\n${summaryText}\n*Trend:*\n${trendText || "Not enough data yet."}`
       );
 
     } else if (text.startsWith("/channels")) {
       const days      = parseInt(text.split(" ")[1]) || 1;
       const breakdown = await getChannelBreakdown(days);
-      if (!breakdown.length) return sendMessage(chatId, "📭 No channel data available yet.");
-
+      if (!breakdown.length) return sendMessage(chatId, "📭 No channel data yet.");
       const channelText = breakdown.map(({ community, channel_name, platform, avg_score, message_count }) => {
-        const mood      = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        const platEmoji = platform === "telegram" ? "📱" : "💬";
-        return `${mood}${platEmoji} *${community}/#${channel_name}* — \`${avg_score.toFixed(3)}\` · ${message_count} msgs`;
+        const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+        const plat = platform === "telegram" ? "📱" : "💬";
+        return `${mood}${plat} *${community}/#${channel_name}* — \`${avg_score.toFixed(3)}\` · ${message_count} msgs`;
       }).join("\n");
-
       await sendMessage(chatId, `📡 *Channel Sentiment — Last ${days} Day${days > 1 ? "s" : ""}*\n\n${channelText}`);
 
     } else if (text.startsWith("/issues")) {
       const days   = parseInt(text.split(" ")[1]) || 1;
       const issues = await getRecentIssues(days, 10);
-      if (!issues.length) return sendMessage(chatId, `✅ No issues across any community in the last ${days} day${days > 1 ? "s" : ""}!`);
-
-      const issueText = issues.map(({ username, community, platform, message_text }) => {
-        const platEmoji = platform === "telegram" ? "📱" : "💬";
-        return `🔴${platEmoji} *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 100)}${message_text?.length > 100 ? "..." : ""}_`;
+      if (!issues.length) return sendMessage(chatId, `✅ No issues in the last ${days} day${days > 1 ? "s" : ""}!`);
+      const issueText = issues.map(({ username, community, platform, message_id, message_text }) => {
+        const plat   = platform === "telegram" ? "📱" : "💬";
+        const idLine = platform === "telegram"
+          ? `\n🆔 \`/tgdelete ${message_id}\``
+          : `\n🆔 \`/delete ${message_id}\``;
+        return `🔴${plat} *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 100)}${message_text?.length > 100 ? "..." : ""}_${idLine}`;
       }).join("\n\n");
-
       await sendMessage(chatId, `🐛 *Issues — Last ${days} Day${days > 1 ? "s" : ""}* (${issues.length} found)\n\n${issueText}`);
 
     } else if (text.startsWith("/feedback")) {
       const days     = parseInt(text.split(" ")[1]) || 1;
       const feedback = await getRecentFeedback(days, 10);
-      if (!feedback.length) return sendMessage(chatId, `📭 No feedback across any community in the last ${days} day${days > 1 ? "s" : ""}.`);
-
-      const feedbackText = feedback.map(({ username, community, platform, message_text }) => {
-        const platEmoji = platform === "telegram" ? "📱" : "💬";
-        return `💬${platEmoji} *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 100)}${message_text?.length > 100 ? "..." : ""}_`;
+      if (!feedback.length) return sendMessage(chatId, `📭 No feedback in the last ${days} day${days > 1 ? "s" : ""}.`);
+      const feedbackText = feedback.map(({ username, community, platform, message_id, message_text }) => {
+        const plat   = platform === "telegram" ? "📱" : "💬";
+        const idLine = platform === "telegram"
+          ? `\n🆔 \`/tgdelete ${message_id}\``
+          : `\n🆔 \`/delete ${message_id}\``;
+        return `💬${plat} *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 100)}${message_text?.length > 100 ? "..." : ""}_${idLine}`;
       }).join("\n\n");
-
       await sendMessage(chatId, `💡 *Feedback — Last ${days} Day${days > 1 ? "s" : ""}* (${feedback.length} found)\n\n${feedbackText}`);
 
     } else if (text.startsWith("/communities")) {
-      const { getCommunityBreakdown } = require("./database");
       const breakdown = await getCommunityBreakdown(7);
       if (!breakdown.length) return sendMessage(chatId, "📭 No community data yet.");
-
       const comText = breakdown.map(({ community, platform, message_count, avg_score, positive_count, negative_count }) => {
-        const platEmoji = platform === "telegram" ? "📱" : "💬";
-        const mood      = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        return `${mood}${platEmoji} *${community}*\n   ${message_count} msgs · avg: \`${avg_score.toFixed(3)}\` · 😊${positive_count} 😠${negative_count}`;
+        const plat = platform === "telegram" ? "📱" : "💬";
+        const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+        return `${mood}${plat} *${community}*\n   ${message_count} msgs · avg: \`${avg_score.toFixed(3)}\` · 😊${positive_count} 😠${negative_count}`;
       }).join("\n\n");
-
       await sendMessage(chatId, `🌐 *Community Breakdown — Last 7 Days*\n\n${comText}`);
+
+    } else if (text.startsWith("/tgdelete")) {
+      const messageId = text.split(" ")[1]?.trim();
+      if (!messageId) return sendMessage(chatId, "⚠️ Usage: `/tgdelete <message_id>`");
+      // Cancel if still pending
+      const msgKey = `${chatId}:${messageId}`;
+      if (pendingTgMsgs.has(msgKey)) {
+        clearTimeout(pendingTgMsgs.get(msgKey));
+        pendingTgMsgs.delete(msgKey);
+        return sendMessage(chatId, `✅ Cancelled pending message \`${messageId}\` — never saved to DB.`);
+      }
+      const removed = await deleteByMessageId(messageId);
+      if (!removed) return sendMessage(chatId, `⚠️ No record found for message ID \`${messageId}\`.`);
+      await sendMessage(chatId, `✅ Removed:\nID: \`${messageId}\`\nCategory: *${removed.category}*\nTracked at: \`${new Date(removed.timestamp).toLocaleString()}\``);
+
+    } else if (text.startsWith("/tgclean")) {
+      const { before, deleted } = await cleanOldRecords();
+      const beforeText = before.map(({ category, total, no_id }) =>
+        `*${category}*: ${total} total, ${no_id} with no ID`
+      ).join("\n") || "No issue/feedback records.";
+      await sendMessage(chatId, `🧹 *Database Cleanup*\n\n*Before:*\n${beforeText}\n\n🗑️ Deleted *${deleted}* unverifiable records.`);
 
     } else if (text.startsWith("/start") || text.startsWith("/help")) {
       await sendMessage(chatId,
-        `👋 *Otterly Sentiment Bot*\n\n` +
-        `Tracking sentiment across all your communities.\n\n` +
+        `👋 *Sentiment Bot*\n\nTracking sentiment across all your communities.\n\n` +
         `*Commands:*\n` +
-        `/report — Combined daily report\n` +
+        `/report — Daily report\n` +
+        `/weeklyreport — Weekly digest\n` +
         `/sentiment \\[days\\] — Sentiment summary\n` +
         `/channels \\[days\\] — Per\\-channel breakdown\n` +
         `/issues \\[days\\] — Recent issues\n` +
         `/feedback \\[days\\] — Recent feedback\n` +
         `/communities — All communities overview\n` +
+        `/tgdelete \\[id\\] — Remove false positive \\(admin\\)\n` +
+        `/tgclean — Clean unverifiable records \\(admin\\)\n` +
         `/help — Show this message`
       );
     }
@@ -197,11 +227,7 @@ async function handleCommand(msg) {
 // ─── Long Polling ─────────────────────────────────────────────────────────────
 async function poll() {
   try {
-    const res = await tgRequest("getUpdates", {
-      offset,
-      timeout:         25,
-      allowed_updates: ["message"],
-    });
+    const res = await tgRequest("getUpdates", { offset, timeout: 25, allowed_updates: ["message"] });
 
     if (res.ok && res.result.length > 0) {
       for (const update of res.result) {
@@ -212,12 +238,10 @@ async function poll() {
         if (msg.text?.startsWith("/")) {
           await handleCommand(msg);
         } else {
-          // Only track messages from monitored groups, NOT the report chat
+          // Only track from monitored groups — NEVER from report chat
           const msgChatId   = String(msg.chat?.id);
           const isMonitored = msgChatId === String(TG_MONITOR_1) || msgChatId === String(TG_MONITOR_2);
-          if (isMonitored) {
-            await trackTelegramMessage(msg);
-          }
+          if (isMonitored) await trackTelegramMessage(msg);
         }
       }
     }
@@ -226,41 +250,28 @@ async function poll() {
                      err.message?.includes("ECONNRESET") ||
                      err.message?.includes("ETIMEDOUT");
     if (!isNormal) console.error("❌ Telegram poll error:", err.message);
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 3000));
   }
-
   setImmediate(poll);
 }
 
 // ─── Daily Report ─────────────────────────────────────────────────────────────
 async function sendTelegramDailyReport() {
-  const reportChatId = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
-
-  if (!reportChatId) {
-    console.warn("⚠️  No TELEGRAM_REPORT_CHAT_ID set — skipping Telegram report.");
-    return;
-  }
-
+  if (!TG_REPORT_CHAT_ID) { console.warn("⚠️  No TELEGRAM_REPORT_CHAT_ID set — skipping."); return; }
   try {
-    const report = await buildTelegramReport();
-    await sendMessage(reportChatId, report);
-    console.log(`✅ Telegram daily report sent to report channel.`);
-  } catch (err) {
-    console.error("❌ Failed to send Telegram report:", err.message);
-  }
+    await sendMessage(TG_REPORT_CHAT_ID, await buildTelegramReport());
+    console.log("✅ Telegram daily report sent.");
+  } catch (err) { console.error("❌ Failed to send Telegram report:", err.message); }
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 function startTelegramBot() {
-  if (!TG_TOKEN) {
-    console.warn("⚠️  TELEGRAM_TOKEN not set — Telegram bot disabled.");
-    return;
-  }
-  console.log(`🤖 Telegram bot started`);
+  if (!TG_TOKEN) { console.warn("⚠️  TELEGRAM_TOKEN not set — Telegram bot disabled."); return; }
+  console.log("🤖 Telegram bot started");
   if (TG_MONITOR_1)      console.log(`   📊 Monitoring: ${COMMUNITY_1} (${TG_MONITOR_1})`);
   if (TG_MONITOR_2)      console.log(`   📊 Monitoring: ${COMMUNITY_2} (${TG_MONITOR_2})`);
   if (TG_REPORT_CHAT_ID) console.log(`   📬 Reports to: ${TG_REPORT_CHAT_ID}`);
   poll();
 }
 
-module.exports = { startTelegramBot, sendTelegramDailyReport, trackTelegramMessage, sendTelegramMessage: sendMessage };
+module.exports = { startTelegramBot, sendTelegramDailyReport, sendTelegramMessage: sendMessage };

@@ -1,40 +1,39 @@
-// Only load .env file in local development
-if (process.env.NODE_ENV !== "production") {
-  require("dotenv").config();
-}
+if (process.env.NODE_ENV !== "production") require("dotenv").config();
 
-const {
-  Client,
-  GatewayIntentBits,
-  REST,
-  Routes,
-  Collection,
-} = require("discord.js");
-const http                        = require("http");
-const cron                        = require("node-cron");
-const { analyzeSentiment }        = require("./sentiment");
-const { classifyMessage }         = require("./classifier");
-const { initDB, insertSentiment, deleteByMessageId } = require("./database");
-const { sendDailyReport }         = require("./reporter");
-const { startTelegramBot, sendTelegramDailyReport } = require("./telegram");
-const commands                    = require("./commands");
+const { Client, GatewayIntentBits, REST, Routes, Collection } = require("discord.js");
+const http  = require("http");
+const fs    = require("fs");
+const path  = require("path");
+const cron  = require("node-cron");
 
-// ─── Debug ────────────────────────────────────────────────────────────────────
+const { analyzeSentiment }                                              = require("./sentiment");
+const { classifyMessage, loadCustomKeywords }                           = require("./classifier");
+const { initDB, insertSentiment, deleteByMessageId, getDashboardData }  = require("./database");
+const { sendDailyReport, sendWeeklyDigest, buildWeeklyDigestTelegram }  = require("./reporter");
+const { startTelegramBot, sendTelegramDailyReport, sendTelegramMessage } = require("./telegram");
+const commands = require("./commands");
+
+// ─── Community Config ─────────────────────────────────────────────────────────
+const COMMUNITY_MAP = {
+  [process.env.GUILD_ID]:   process.env.COMMUNITY_NAME   || "discord_main",
+  [process.env.GUILD_ID_2]: process.env.COMMUNITY_NAME_2 || "discord_secondary",
+};
+
 console.log("ENV CHECK:", {
-  hasToken:    !!process.env.DISCORD_TOKEN,
-  hasClientId: !!process.env.CLIENT_ID,
-  hasGuildId:  !!process.env.GUILD_ID,
-  hasChannel:  !!process.env.REPORT_CHANNEL_ID,
-  hasDatabase: !!process.env.DATABASE_URL,
-  hasTelegram: !!process.env.TELEGRAM_TOKEN,
-  hasTgChatId: !!process.env.TELEGRAM_CHAT_ID,
-  tgChatId:    process.env.TELEGRAM_CHAT_ID, // log actual value
-  nodeEnv:     process.env.NODE_ENV,
+  hasToken:     !!process.env.DISCORD_TOKEN,
+  hasClientId:  !!process.env.CLIENT_ID,
+  hasGuildId:   !!process.env.GUILD_ID,
+  hasChannel:   !!process.env.REPORT_CHANNEL_ID,
+  hasDatabase:  !!process.env.DATABASE_URL,
+  hasTelegram:  !!process.env.TELEGRAM_TOKEN,
+  hasTgChatId:  !!process.env.TELEGRAM_CHAT_ID,
+  hasTgChatId2: !!process.env.TELEGRAM_CHAT_ID_2,
+  hasTgReport:  !!process.env.TELEGRAM_REPORT_CHAT_ID,
+  nodeEnv:      process.env.NODE_ENV,
 });
 
-// ─── Parse optional ignored channels ─────────────────────────────────────────
 const IGNORED_CHANNELS = process.env.IGNORED_CHANNELS
-  ? process.env.IGNORED_CHANNELS.split(",").map((id) => id.trim())
+  ? process.env.IGNORED_CHANNELS.split(",").map(id => id.trim())
   : [];
 
 // ─── Client Setup ─────────────────────────────────────────────────────────────
@@ -48,44 +47,52 @@ const client = new Client({
 });
 
 client.commands = new Collection();
-commands.forEach((cmd) => client.commands.set(cmd.data.name, cmd));
+commands.forEach(cmd => client.commands.set(cmd.data.name, cmd));
 
 // ─── Register Slash Commands ──────────────────────────────────────────────────
-async function registerCommands() {
+async function registerCommandsForGuild(guildId) {
+  if (!guildId) return;
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
   try {
-    console.log("🔄 Registering slash commands...");
+    console.log(`🔄 Registering slash commands for guild ${guildId}...`);
     await rest.put(
-      Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
-      { body: commands.map((cmd) => cmd.data.toJSON()) }
+      Routes.applicationGuildCommands(process.env.CLIENT_ID, guildId),
+      { body: commands.map(cmd => cmd.data.toJSON()) }
     );
-    console.log("✅ Slash commands registered.");
+    console.log(`✅ Slash commands registered for guild: ${guildId}`);
   } catch (err) {
-    console.error("❌ Failed to register commands:", err.message);
+    console.error(`❌ Failed to register commands for guild ${guildId}:`, err.message);
   }
 }
 
-// ─── Schedule Daily Reports (Discord + Telegram) ──────────────────────────────
-function scheduleDailyReport() {
-  const cronExpression = process.env.REPORT_CRON || "0 9 * * *";
-
-  if (!cron.validate(cronExpression)) {
-    console.error(`❌ Invalid REPORT_CRON expression: "${cronExpression}"`);
-    return;
+// ─── Schedule Reports ─────────────────────────────────────────────────────────
+function scheduleReports() {
+  // Daily — default 9am UTC every day
+  const dailyCron = process.env.REPORT_CRON || "0 9 * * *";
+  if (cron.validate(dailyCron)) {
+    cron.schedule(dailyCron, async () => {
+      console.log("⏰ Running daily sentiment report...");
+      await sendDailyReport(client);
+      await sendTelegramDailyReport();
+    });
+    console.log(`📅 Daily report scheduled: "${dailyCron}"`);
   }
 
-  cron.schedule(cronExpression, async () => {
-    console.log("⏰ Running scheduled daily sentiment report...");
-    // Send to Discord
-    await sendDailyReport(client);
-    // Send to Telegram
-    await sendTelegramDailyReport();
-  });
-
-  console.log(`📅 Daily report scheduled: "${cronExpression}"`);
+  // Weekly — every Monday 9am UTC
+  const weeklyCron = process.env.WEEKLY_CRON || "0 9 * * 1";
+  if (cron.validate(weeklyCron)) {
+    cron.schedule(weeklyCron, async () => {
+      console.log("📋 Running weekly digest...");
+      await sendWeeklyDigest(client);
+      const tgText     = await buildWeeklyDigestTelegram();
+      const reportChat = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+      if (reportChat) await sendTelegramMessage(reportChat, tgText);
+    });
+    console.log(`📋 Weekly digest scheduled: "${weeklyCron}" (every Monday)`);
+  }
 }
 
-// ─── Discord Events ───────────────────────────────────────────────────────────
+// ─── Ready ────────────────────────────────────────────────────────────────────
 client.once("clientReady", async () => {
   console.log(`\n🤖 Discord: Logged in as ${client.user.tag}`);
   console.log(`📊 Tracking sentiment in guild: ${process.env.GUILD_ID}`);
@@ -93,23 +100,23 @@ client.once("clientReady", async () => {
 
   try {
     await initDB();
+    await loadCustomKeywords();
   } catch (err) {
     console.error("❌ Database connection failed:", err.message);
   }
 
-  try {
-    await registerCommands();
-  } catch (err) {
-    console.error("❌ Command registration failed:", err.message);
-  }
-
-  scheduleDailyReport();
-
-  // Start Telegram bot
+  await registerCommandsForGuild(process.env.GUILD_ID);
+  await registerCommandsForGuild(process.env.GUILD_ID_2);
+  scheduleReports();
   startTelegramBot();
 });
 
-// ── Track message sentiment ───────────────────────────────────────────────────
+// ─── 30-Second Delay Queue ────────────────────────────────────────────────────
+// Messages are held in memory for 30s before saving to DB.
+// If automod deletes them in that window, they never reach the database.
+const TRACK_DELAY_MS  = 30 * 1000;
+const pendingMessages = new Map(); // message_id → timeout
+
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   if (IGNORED_CHANNELS.includes(message.channel.id)) return;
@@ -126,52 +133,66 @@ client.on("messageCreate", async (message) => {
 
   const { score, label } = analyzeSentiment(stripped);
   const category         = classifyMessage(stripped);
+  const community        = COMMUNITY_MAP[message.guild?.id] || "discord_main";
 
-  try {
-    await insertSentiment({
-      message_id:   message.id,
-      user_id:      message.author.id,
-      username:     message.author.username,
-      channel_id:   message.channel.id,
-      channel_name: message.channel.name || "unknown",
-      score,
-      label,
-      category,
-      message_text: stripped.slice(0, 300),
-    });
-  } catch (err) {
-    console.error("❌ Failed to insert sentiment:", err.message);
-  }
+  const payload = {
+    message_id:   message.id,
+    user_id:      message.author.id,
+    username:     message.author.username,
+    channel_id:   message.channel.id,
+    channel_name: message.channel.name || "unknown",
+    score, label, category,
+    message_text: stripped.slice(0, 300),
+    community,
+    platform: "discord",
+  };
+
+  // Schedule DB save after 30s delay
+  const timeout = setTimeout(async () => {
+    pendingMessages.delete(message.id);
+    try { await insertSentiment(payload); }
+    catch (err) { console.error("❌ Failed to insert sentiment:", err.message); }
+  }, TRACK_DELAY_MS);
+
+  pendingMessages.set(message.id, timeout);
 });
 
-// ── Handle deleted messages ───────────────────────────────────────────────────
-const MIN_MESSAGE_AGE_MS = 5 * 60 * 1000; // 5 minutes
-
+// ─── Handle Deleted Messages ──────────────────────────────────────────────────
 client.on("messageDelete", async (message) => {
+  // Still in the 30s queue? Cancel it — never saved
+  if (pendingMessages.has(message.id)) {
+    clearTimeout(pendingMessages.get(message.id));
+    pendingMessages.delete(message.id);
+    console.log(`🗑️  Cancelled pending message — deleted before tracking`);
+    return;
+  }
+  // Already saved? Remove from DB
   try {
-    const deletedAt  = Date.now();
-    const createdAt  = message.createdTimestamp;
-    const ageMs      = deletedAt - createdAt;
-
-    // If message was deleted within 5 minutes, remove from database
-    if (ageMs < MIN_MESSAGE_AGE_MS) {
-      const removed = await deleteByMessageId(message.id);
-      if (removed) {
-        console.log(`🗑️  Removed ${removed.category} message deleted after ${Math.round(ageMs / 1000)}s`);
-      }
-    }
+    const removed = await deleteByMessageId(message.id);
+    if (removed) console.log(`🗑️  Removed ${removed.category} message from DB`);
   } catch (err) {
     console.error("❌ Failed to handle message delete:", err.message);
   }
 });
 
-// ── Handle slash commands ─────────────────────────────────────────────────────
+// Handle bulk deletes (mod purge)
+client.on("messageDeleteBulk", async (messages) => {
+  for (const message of messages.values()) {
+    if (pendingMessages.has(message.id)) {
+      clearTimeout(pendingMessages.get(message.id));
+      pendingMessages.delete(message.id);
+    } else {
+      try { await deleteByMessageId(message.id); } catch (_) {}
+    }
+  }
+  console.log(`🗑️  Bulk delete handled: ${messages.size} messages`);
+});
+
+// ─── Slash Commands ───────────────────────────────────────────────────────────
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-
   const command = client.commands.get(interaction.commandName);
   if (!command) return;
-
   try {
     await command.execute(interaction);
   } catch (err) {
@@ -183,19 +204,37 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ─── Error Handling ───────────────────────────────────────────────────────────
-client.on("error", (err) => console.error("❌ Client error:", err.message));
-client.on("warn",  (msg) => console.warn("⚠️  Client warning:", msg));
+client.on("error", err => console.error("❌ Client error:", err.message));
+client.on("warn",  msg => console.warn("⚠️  Warning:", msg));
+process.on("uncaughtException",  err => console.error("❌ Uncaught Exception:", err));
+process.on("unhandledRejection", err => console.error("❌ Unhandled Rejection:", err));
 
-process.on("uncaughtException",   (err) => console.error("❌ Uncaught Exception:", err));
-process.on("unhandledRejection",  (err) => console.error("❌ Unhandled Rejection:", err));
-
-// ─── Keep-Alive HTTP Server ───────────────────────────────────────────────────
-http.createServer((req, res) => res.end("Bot is running!")).listen(process.env.PORT || 3000, () => {
+// ─── Dashboard + Keep-Alive Server ───────────────────────────────────────────
+http.createServer(async (req, res) => {
+  if (req.url === "/api/dashboard") {
+    try {
+      const data = await getDashboardData();
+      res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+      res.end(JSON.stringify(data));
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+  } else {
+    const htmlPath = path.join(__dirname, "dashboard.html");
+    if (fs.existsSync(htmlPath)) {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(fs.readFileSync(htmlPath));
+    } else {
+      res.writeHead(200); res.end("Bot is running!");
+    }
+  }
+}).listen(process.env.PORT || 3000, () => {
   console.log(`🌐 Keep-alive server on port ${process.env.PORT || 3000}`);
 });
 
-// ─── Start Discord Bot ────────────────────────────────────────────────────────
+// ─── Start ────────────────────────────────────────────────────────────────────
 console.log("🔑 Attempting Discord login...");
 client.login(process.env.DISCORD_TOKEN)
   .then(() => console.log("🔑 Login successful"))
-  .catch((err) => console.error("❌ Login failed:", err.message));
+  .catch(err => console.error("❌ Login failed:", err.message));

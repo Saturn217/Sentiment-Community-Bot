@@ -78,7 +78,7 @@ const commands = [
         const idLine  = platform === "telegram"
           ? `\n> 🆔 \`/tgdelete ${message_id}\``
           : `\n> 🆔 \`/delete ${message_id}\``;
-        return `🔴${plat} **${username}** [${community}]\n> ${message_text?.slice(0, 100)}${message_text?.length > 100 ? "..." : ""}${idLine}`;
+        return `🔴${plat} **${username}** [${community}]\n> ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}${idLine}`;
       }).join("\n\n");
       return interaction.editReply({ embeds: [
         new EmbedBuilder().setTitle(`🐛 Issues — Last ${days} Day${days > 1 ? "s" : ""} (${issues.length} found)`).setColor(0xe74c3c).setDescription(text).setTimestamp()
@@ -101,7 +101,7 @@ const commands = [
         const idLine = platform === "telegram"
           ? `\n> 🆔 \`/tgdelete ${message_id}\``
           : `\n> 🆔 \`/delete ${message_id}\``;
-        return `💬${plat} **${username}** [${community}]\n> ${message_text?.slice(0, 100)}${message_text?.length > 100 ? "..." : ""}${idLine}`;
+        return `💬${plat} **${username}** [${community}]\n> ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}${idLine}`;
       }).join("\n\n");
       return interaction.editReply({ embeds: [
         new EmbedBuilder().setTitle(`💡 Feedback — Last ${days} Day${days > 1 ? "s" : ""} (${feedback.length} found)`).setColor(0x3498db).setDescription(text).setTimestamp()
@@ -247,7 +247,7 @@ const commands = [
         channel_id:   interaction.channel.id,
         channel_name: interaction.channel.name || "unknown",
         score, label, category,
-        message_text: text.slice(0, 300),
+        message_text: text.slice(0, 1000),
         community,
         platform: "discord",
       });
@@ -255,7 +255,7 @@ const commands = [
       const catEmoji = category === "issue" ? "🐛" : "💡";
       return interaction.editReply(
         `✅ Manually tracked as **${category}**:\n` +
-        `${catEmoji} **${username}**: ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`
+        `${catEmoji} **${username}**: ${text.slice(0, 200)}${text.length > 200 ? "..." : ""}`
       );
     },
   },

@@ -142,7 +142,7 @@ client.on("messageCreate", async (message) => {
     channel_id:   message.channel.id,
     channel_name: message.channel.name || "unknown",
     score, label, category,
-    message_text: stripped.slice(0, 300),
+    message_text: stripped.slice(0, 1000),
     community,
     platform: "discord",
   };

@@ -81,7 +81,7 @@ async function trackTelegramMessage(msg) {
     channel_id:   chatId,
     channel_name: msg.chat?.title || community,
     score, label, category,
-    message_text: stripped.slice(0, 300),
+    message_text: stripped.slice(0, 1000),
     community,
     platform: "telegram",
   };
@@ -154,7 +154,7 @@ async function handleCommand(msg) {
         const idLine = platform === "telegram"
           ? `\n🆔 \`/tgdelete ${message_id}\``
           : `\n🆔 \`/delete ${message_id}\``;
-        return `🔴${plat} *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 100)}${message_text?.length > 100 ? "..." : ""}_${idLine}`;
+        return `🔴${plat} *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}_${idLine}`;
       }).join("\n\n");
       await sendMessage(chatId, `🐛 *Issues — Last ${days} Day${days > 1 ? "s" : ""}* (${issues.length} found)\n\n${issueText}`);
 
@@ -167,7 +167,7 @@ async function handleCommand(msg) {
         const idLine = platform === "telegram"
           ? `\n🆔 \`/tgdelete ${message_id}\``
           : `\n🆔 \`/delete ${message_id}\``;
-        return `💬${plat} *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 100)}${message_text?.length > 100 ? "..." : ""}_${idLine}`;
+        return `💬${plat} *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}_${idLine}`;
       }).join("\n\n");
       await sendMessage(chatId, `💡 *Feedback — Last ${days} Day${days > 1 ? "s" : ""}* (${feedback.length} found)\n\n${feedbackText}`);
 
@@ -227,14 +227,14 @@ async function handleCommand(msg) {
         channel_id:   String(chatId),
         channel_name: msg.chat?.title || community,
         score, label, category,
-        message_text: msgText.slice(0, 300),
+        message_text: msgText.slice(0, 1000),
         community,
         platform: "telegram",
       });
 
       const catEmoji = category === "issue" ? "🐛" : "💡";
       await sendMessage(chatId,
-        `✅ Manually tracked as *${category}*:\n${catEmoji} ${msgText.slice(0, 100)}${msgText.length > 100 ? "..." : ""}`
+        `✅ Manually tracked as *${category}*:\n${catEmoji} ${msgText.slice(0, 200)}${msgText.length > 200 ? "..." : ""}`
       );
 
     } else if (text.startsWith("/start") || text.startsWith("/help")) {

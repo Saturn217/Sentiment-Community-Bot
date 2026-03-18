@@ -138,13 +138,13 @@ async function buildDailyReport() {
 
   const issuesText = recentIssues.length > 0
     ? recentIssues.map(({ username, community, message_text }) =>
-        `🔴 **${username}** [${community}]: ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
+        `🔴 **${username}** [${community}]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
       ).join("\n")
     : "✅ No issues reported today — community is happy!";
 
   const feedbackText = recentFeedback.length > 0
     ? recentFeedback.map(({ username, community, message_text }) =>
-        `💬 **${username}** [${community}]: ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
+        `💬 **${username}** [${community}]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
       ).join("\n")
     : "📭 No feedback submitted today.";
 
@@ -212,13 +212,13 @@ async function buildTelegramReport() {
 
   const issuesText = recentIssues.length > 0
     ? recentIssues.map(({ username, community, message_text }) =>
-        `🔴 *${username}* \\[${community}\\]: ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
+        `🔴 *${username}* \\[${community}\\]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
       ).join("\n")
     : "✅ No issues reported today!";
 
   const feedbackText = recentFeedback.length > 0
     ? recentFeedback.map(({ username, community, message_text }) =>
-        `💬 *${username}* \\[${community}\\]: ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
+        `💬 *${username}* \\[${community}\\]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
       ).join("\n")
     : "📭 No feedback submitted today.";
 
@@ -270,13 +270,13 @@ async function buildWeeklyDigest() {
 
   const issuesText = issues.length > 0
     ? issues.slice(0, 5).map(({ username, community, message_text }) =>
-        `🔴 **${username}** [${community}]: ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
+        `🔴 **${username}** [${community}]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
       ).join("\n")
     : "✅ No issues this week!";
 
   const feedbackText = feedback.length > 0
     ? feedback.slice(0, 5).map(({ username, community, message_text }) =>
-        `💬 **${username}** [${community}]: ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
+        `💬 **${username}** [${community}]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
       ).join("\n")
     : "📭 No feedback this week.";
 
@@ -324,11 +324,11 @@ async function buildWeeklyDigestTelegram() {
   }).join("\n") || "No data.";
 
   const issuesText = issues.slice(0, 3).map(({ username, community, message_text }) =>
-    `🔴 *${username}* \\[${community}\\]: ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
+    `🔴 *${username}* \\[${community}\\]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
   ).join("\n") || "✅ No issues this week!";
 
   const feedbackText = feedback.slice(0, 3).map(({ username, community, message_text }) =>
-    `💬 *${username}* \\[${community}\\]: ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
+    `💬 *${username}* \\[${community}\\]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
   ).join("\n") || "📭 No feedback this week.";
 
   const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 7);

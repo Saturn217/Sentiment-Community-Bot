@@ -37,6 +37,7 @@ async function initDB() {
     `ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS message_id   TEXT`,
     `ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS community    TEXT NOT NULL DEFAULT 'discord_main'`,
     `ALTER TABLE sentiment ADD COLUMN IF NOT EXISTS platform     TEXT NOT NULL DEFAULT 'discord'`,
+    `ALTER TABLE sentiment ALTER COLUMN message_text TYPE TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_timestamp  ON sentiment(timestamp)`,
     `CREATE INDEX IF NOT EXISTS idx_channel    ON sentiment(channel_id)`,
     `CREATE INDEX IF NOT EXISTS idx_label      ON sentiment(label)`,

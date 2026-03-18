@@ -225,15 +225,16 @@ const commands = [
       .addStringOption(opt =>
         opt.setName("text").setDescription("The message content to track").setRequired(true)
       )
-      .addUserOption(opt =>
-        opt.setName("user").setDescription("The user who sent it (default: you)").setRequired(false)
+      .addStringOption(opt =>
+        opt.setName("username").setDescription("Username of who sent it (e.g. john_doe)").setRequired(true)
       ),
     async execute(interaction) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const category = interaction.options.getString("category");
       const text     = interaction.options.getString("text");
-      const user     = interaction.options.getUser("user") || interaction.user;
+      const username = interaction.options.getString("username").replace("@", "").trim();
+
       const { analyzeSentiment } = require("./sentiment");
       const { insertSentiment }  = require("./database");
       const { score, label }     = analyzeSentiment(text);
@@ -241,8 +242,8 @@ const commands = [
 
       await insertSentiment({
         message_id:   `manual_${Date.now()}`,
-        user_id:      user.id,
-        username:     user.username,
+        user_id:      `manual_${username}`,
+        username,
         channel_id:   interaction.channel.id,
         channel_name: interaction.channel.name || "unknown",
         score, label, category,
@@ -254,7 +255,7 @@ const commands = [
       const catEmoji = category === "issue" ? "🐛" : "💡";
       return interaction.editReply(
         `✅ Manually tracked as **${category}**:\n` +
-        `${catEmoji} **${user.username}**: ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`
+        `${catEmoji} **${username}**: ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`
       );
     },
   },

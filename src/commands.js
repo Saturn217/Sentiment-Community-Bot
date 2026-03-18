@@ -212,6 +212,53 @@ const commands = [
     },
   },
 
+  // ── /track (admin only) ───────────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName("track")
+      .setDescription("Manually add a message as an issue or feedback (admin only)")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+      .addStringOption(opt =>
+        opt.setName("category").setDescription("issue or feedback").setRequired(true)
+          .addChoices({ name: "🐛 Issue", value: "issue" }, { name: "💡 Feedback", value: "feedback" })
+      )
+      .addStringOption(opt =>
+        opt.setName("text").setDescription("The message content to track").setRequired(true)
+      )
+      .addUserOption(opt =>
+        opt.setName("user").setDescription("The user who sent it (default: you)").setRequired(false)
+      ),
+    async execute(interaction) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const category = interaction.options.getString("category");
+      const text     = interaction.options.getString("text");
+      const user     = interaction.options.getUser("user") || interaction.user;
+      const { analyzeSentiment } = require("./sentiment");
+      const { insertSentiment }  = require("./database");
+      const { score, label }     = analyzeSentiment(text);
+      const community            = process.env.COMMUNITY_NAME || "discord_main";
+
+      await insertSentiment({
+        message_id:   `manual_${Date.now()}`,
+        user_id:      user.id,
+        username:     user.username,
+        channel_id:   interaction.channel.id,
+        channel_name: interaction.channel.name || "unknown",
+        score, label, category,
+        message_text: text.slice(0, 300),
+        community,
+        platform: "discord",
+      });
+
+      const catEmoji = category === "issue" ? "🐛" : "💡";
+      return interaction.editReply(
+        `✅ Manually tracked as **${category}**:\n` +
+        `${catEmoji} **${user.username}**: ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`
+      );
+    },
+  },
+
 ];
 
 module.exports = commands;

@@ -202,6 +202,41 @@ async function handleCommand(msg) {
       ).join("\n") || "No issue/feedback records.";
       await sendMessage(chatId, `🧹 *Database Cleanup*\n\n*Before:*\n${beforeText}\n\n🗑️ Deleted *${deleted}* unverifiable records.`);
 
+    } else if (text.startsWith("/tgtrack")) {
+      // Usage: /tgtrack issue|feedback <message text>
+      const parts    = text.split(" ");
+      const category = parts[1]?.toLowerCase();
+      const msgText  = parts.slice(2).join(" ").trim();
+
+      if (!category || !["issue", "feedback"].includes(category) || !msgText) {
+        return sendMessage(chatId,
+          `⚠️ Usage: \`/tgtrack <issue|feedback> <message text>\`\n\n` +
+          `Example:\n\`/tgtrack issue User reported BTC leverage resets when changing CAKE\``
+        );
+      }
+
+      const { analyzeSentiment } = require("./sentiment");
+      const { insertSentiment }  = require("./database");
+      const { score, label }     = analyzeSentiment(msgText);
+      const community            = CHAT_COMMUNITY_MAP[String(chatId)] || "telegram_manual";
+
+      await insertSentiment({
+        message_id:   `manual_${Date.now()}`,
+        user_id:      String(msg.from?.id || "manual"),
+        username:     msg.from?.username || msg.from?.first_name || "admin",
+        channel_id:   String(chatId),
+        channel_name: msg.chat?.title || community,
+        score, label, category,
+        message_text: msgText.slice(0, 300),
+        community,
+        platform: "telegram",
+      });
+
+      const catEmoji = category === "issue" ? "🐛" : "💡";
+      await sendMessage(chatId,
+        `✅ Manually tracked as *${category}*:\n${catEmoji} ${msgText.slice(0, 100)}${msgText.length > 100 ? "..." : ""}`
+      );
+
     } else if (text.startsWith("/start") || text.startsWith("/help")) {
       await sendMessage(chatId,
         `👋 *Sentiment Bot*\n\nTracking sentiment across all your communities.\n\n` +
@@ -213,6 +248,7 @@ async function handleCommand(msg) {
         `/issues \\[days\\] — Recent issues\n` +
         `/feedback \\[days\\] — Recent feedback\n` +
         `/communities — All communities overview\n` +
+        `/tgtrack \\[issue|feedback\\] \\[text\\] — Manually track a message \\(admin\\)\n` +
         `/tgdelete \\[id\\] — Remove false positive \\(admin\\)\n` +
         `/tgclean — Clean unverifiable records \\(admin\\)\n` +
         `/help — Show this message`

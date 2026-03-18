@@ -21,6 +21,51 @@ function buildBar(value, total, emoji, width = 20) {
   return `${emoji} ${"█".repeat(filled)}${"░".repeat(width - filled)} ${pct}% (${value})`;
 }
 
+/** Convert raw score to plain English that anyone can understand */
+function scoreToWords(score) {
+  if (score > 0.3)   return "🔥 Very happy";
+  if (score > 0.1)   return "😄 Happy";
+  if (score > 0.02)  return "🙂 Mostly positive";
+  if (score > -0.02) return "😐 Mixed / neutral";
+  if (score > -0.1)  return "😕 A bit negative";
+  if (score > -0.3)  return "😠 Unhappy";
+  return               "🚨 Very unhappy";
+}
+
+/** Format a date value (string or Date) to a short readable format e.g. "Fri Mar 13" */
+function formatDate(dateVal) {
+  const d = new Date(dateVal);
+  return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
+/** Generate a plain-English summary of what the community is talking about */
+function buildCommunitySummary(positive, negative, neutral, count, issueCount, feedbackCount) {
+  if (count === 0) return "No messages tracked today.";
+
+  const posRatio = Math.round((positive / count) * 100);
+  const negRatio = Math.round((negative / count) * 100);
+
+  let summary = "";
+
+  // Overall vibe
+  if (posRatio >= 70)       summary += `The community is in great spirits today — ${posRatio}% of messages were positive. `;
+  else if (posRatio >= 50)  summary += `The community is mostly positive today with ${posRatio}% upbeat messages. `;
+  else if (negRatio >= 50)  summary += `The community is having a tough day — ${negRatio}% of messages were negative. `;
+  else if (negRatio >= 30)  summary += `There's some frustration in the community today (${negRatio}% negative). `;
+  else                      summary += `The community mood is mixed today. `;
+
+  // Issues
+  if (issueCount > 5)       summary += `⚠️ ${issueCount} issues were reported — worth investigating. `;
+  else if (issueCount > 0)  summary += `${issueCount} issue${issueCount > 1 ? "s were" : " was"} reported. `;
+  else                      summary += `No issues reported. `;
+
+  // Feedback
+  if (feedbackCount > 0)    summary += `${feedbackCount} feedback item${feedbackCount > 1 ? "s" : ""} received.`;
+
+  return summary.trim();
+}
+
+
 // ─── Daily Report Data ────────────────────────────────────────────────────────
 async function fetchReportData() {
   const [summary, trend, channels, topUsers, { count }, categorySummary, recentIssues, recentFeedback, communities] =
@@ -45,42 +90,51 @@ async function buildDailyReport() {
   const overallScore = count > 0 ? totalScore / count : 0;
   const { emoji: moodEmoji, label: moodLabel, color: embedColor } = getMood(overallScore);
 
+  const issueCount    = categorySummary.find(c => c.category === "issue")?.count    || 0;
+  const feedbackCount = categorySummary.find(c => c.category === "feedback")?.count || 0;
+
+  // Plain English summary of today
+  const communitySummary = buildCommunitySummary(positive, negative, neutral, count, issueCount, feedbackCount);
+
   const breakdownText = count > 0
     ? [buildBar(positive, count, "🟢"), buildBar(neutral, count, "🟡"), buildBar(negative, count, "🔴")].join("\n")
     : "No messages tracked today.";
 
+  // Human-readable trend — short date + plain English score
   const trendText = trend.length > 0
     ? trend.map(({ date, avg_score, message_count }) => {
-        const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
-        return `${arrow} \`${date}\` — \`${avg_score > 0 ? "+" : ""}${avg_score.toFixed(3)}\` · ${message_count} msgs`;
+        const arrow  = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
+        const words  = scoreToWords(avg_score);
+        const short  = formatDate(date);
+        return `${arrow} **${short}** — ${words} · ${message_count} msg${message_count !== 1 ? "s" : ""}`;
       }).join("\n")
     : "Not enough data yet.";
 
   const channelText = channels.length > 0
     ? channels.map(({ community, channel_name, platform, avg_score, message_count }) => {
-        const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        const plat = platform === "telegram" ? "📱" : "💬";
-        return `${mood}${plat} **${community}/#${channel_name}** — \`${avg_score.toFixed(3)}\` · ${message_count} msgs`;
+        const mood  = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+        const plat  = platform === "telegram" ? "📱" : "💬";
+        const words = scoreToWords(avg_score);
+        return `${mood}${plat} **${community}/#${channel_name}** — ${words} · ${message_count} msg${message_count !== 1 ? "s" : ""}`;
       }).join("\n")
     : "No channel data available.";
 
   const usersText = topUsers.length > 0
     ? topUsers.slice(0, 3).map(({ username, community, avg_score, message_count }) => {
-        const mood = avg_score > 0.05 ? "😊" : avg_score < -0.05 ? "😤" : "😐";
-        return `${mood} **${username}** (${community}) — avg: \`${avg_score.toFixed(3)}\` · ${message_count} msgs`;
+        const mood  = avg_score > 0.05 ? "😊" : avg_score < -0.05 ? "😤" : "😐";
+        const words = scoreToWords(avg_score);
+        return `${mood} **${username}** (${community}) — ${words} · ${message_count} msg${message_count !== 1 ? "s" : ""}`;
       }).join("\n")
     : "Not enough user data yet (min. 3 messages).";
 
   const communityText = communities.length > 0
     ? communities.map(({ community, platform, message_count, avg_score }) => {
-        const plat = platform === "telegram" ? "📱" : "💬";
-        const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        return `${mood}${plat} **${community}** — \`${avg_score.toFixed(3)}\` · ${message_count} msgs`;
+        const plat  = platform === "telegram" ? "📱" : "💬";
+        const mood  = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+        const words = scoreToWords(avg_score);
+        return `${mood}${plat} **${community}** — ${words} · ${message_count} msg${message_count !== 1 ? "s" : ""}`;
       }).join("\n")
     : "No community data yet.";
-
-  const issueCount    = categorySummary.find(c => c.category === "issue")?.count    || 0;
-  const feedbackCount = categorySummary.find(c => c.category === "feedback")?.count || 0;
 
   const issuesText = recentIssues.length > 0
     ? recentIssues.map(({ username, community, message_text }) =>
@@ -98,7 +152,11 @@ async function buildDailyReport() {
 
   return new EmbedBuilder()
     .setTitle(`${moodEmoji} Daily Sentiment Report — ${moodLabel}`)
-    .setDescription(`**${today}**\nOverall score: \`${overallScore.toFixed(3)}\` · ${count || 0} messages analyzed across all communities`)
+    .setDescription(
+      `**${today}**\n\n` +
+      `📝 **What's happening:** ${communitySummary}\n\n` +
+      `📊 **Community mood:** ${scoreToWords(overallScore)} · ${count || 0} messages analyzed`
+    )
     .setColor(embedColor)
     .addFields(
       { name: "🌐 Communities Today",                value: communityText,                       inline: false },
@@ -115,7 +173,7 @@ async function buildDailyReport() {
 
 // ─── Daily Telegram Text ──────────────────────────────────────────────────────
 async function buildTelegramReport() {
-  const { summary, trend, count, recentIssues, recentFeedback, communities } = await fetchReportData();
+  const { summary, trend, count, recentIssues, recentFeedback, communities, categorySummary } = await fetchReportData();
 
   let positive = 0, negative = 0, neutral = 0, totalScore = 0;
   summary.forEach(({ label, count: c, avg_score }) => {
@@ -124,8 +182,12 @@ async function buildTelegramReport() {
     if (label === "neutral")  neutral  = c;
     totalScore += avg_score * c;
   });
-  const overallScore = count > 0 ? totalScore / count : 0;
+  const overallScore  = count > 0 ? totalScore / count : 0;
   const { emoji: moodEmoji, label: moodLabel } = getMood(overallScore);
+  const issueCount    = categorySummary?.find(c => c.category === "issue")?.count    || 0;
+  const feedbackCount = categorySummary?.find(c => c.category === "feedback")?.count || 0;
+
+  const communitySummary = buildCommunitySummary(positive, negative, neutral, count, issueCount, feedbackCount);
 
   const breakdownText = count > 0
     ? `${buildBar(positive, count, "🟢", 10)}\n${buildBar(neutral, count, "🟡", 10)}\n${buildBar(negative, count, "🔴", 10)}`
@@ -134,14 +196,17 @@ async function buildTelegramReport() {
   let trendText = "";
   trend.slice(-5).forEach(({ date, avg_score, message_count }) => {
     const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
-    trendText += `${arrow} \`${date}\` — \`${avg_score > 0 ? "+" : ""}${avg_score.toFixed(3)}\` · ${message_count} msgs\n`;
+    const words = scoreToWords(avg_score);
+    const short = formatDate(date);
+    trendText += `${arrow} *${short}* — ${words} · ${message_count} msgs\n`;
   });
 
   const communityText = communities.length > 0
     ? communities.map(({ community, platform, message_count, avg_score }) => {
-        const plat = platform === "telegram" ? "📱" : "💬";
-        const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        return `${mood}${plat} *${community}* — \`${avg_score.toFixed(3)}\` · ${message_count} msgs`;
+        const plat  = platform === "telegram" ? "📱" : "💬";
+        const mood  = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+        const words = scoreToWords(avg_score);
+        return `${mood}${plat} *${community}* — ${words} · ${message_count} msgs`;
       }).join("\n")
     : "No community data yet.";
 
@@ -159,7 +224,7 @@ async function buildTelegramReport() {
 
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
 
-  return `${moodEmoji} *Daily Sentiment Report — ${moodLabel}*\n📅 ${today}\nOverall: \`${overallScore.toFixed(3)}\` · ${count || 0} messages\n\n🌐 *Communities Today*\n${communityText}\n\n📊 *Sentiment Breakdown*\n\`\`\`\n${breakdownText}\n\`\`\`\n📅 *7\\-Day Trend*\n${trendText || "Not enough data yet."}\n🐛 *Issues Today*\n${issuesText}\n\n💡 *Feedback Today*\n${feedbackText}\n\n_Sentiment Bot • Tracking community vibes daily_`;
+  return `${moodEmoji} *Daily Sentiment Report — ${moodLabel}*\n📅 ${today}\n\n📝 *What's happening:* ${communitySummary}\n📊 *Community mood:* ${scoreToWords(overallScore)} · ${count || 0} messages\n\n🌐 *Communities Today*\n${communityText}\n\n📊 *Sentiment Breakdown*\n\`\`\`\n${breakdownText}\n\`\`\`\n📅 *7\\-Day Trend*\n${trendText || "Not enough data yet."}\n🐛 *Issues Today*\n${issuesText}\n\n💡 *Feedback Today*\n${feedbackText}\n\n_Sentiment Bot • Tracking community vibes daily_`;
 }
 
 // ─── Weekly Discord Embed ─────────────────────────────────────────────────────
@@ -183,7 +248,9 @@ async function buildWeeklyDigest() {
     const dayMsgs  = dayRows.reduce((s, r) => s + r.message_count, 0);
     const dayScore = dayRows.reduce((s, r) => s + r.avg_score * r.message_count, 0) / (dayMsgs || 1);
     const arrow    = dayScore > 0.05 ? "📈" : dayScore < -0.05 ? "📉" : "➡️";
-    return `${arrow} \`${date}\` — \`${dayScore > 0 ? "+" : ""}${dayScore.toFixed(3)}\` · ${dayMsgs} msgs`;
+    const words    = scoreToWords(dayScore);
+    const short    = formatDate(date);
+    return `${arrow} **${short}** — ${words} · ${dayMsgs} msg${dayMsgs !== 1 ? "s" : ""}`;
   }).join("\n") || "No data.";
 
   const communityText = communities.length > 0

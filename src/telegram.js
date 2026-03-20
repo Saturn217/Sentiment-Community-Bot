@@ -187,6 +187,25 @@ async function handleCommand(msg) {
       }).join("\n\n");
       await sendMessage(chatId, `🌐 *Community Breakdown — Last 7 Days*\n\n${comText}`);
 
+    } else if (text.startsWith("/tgdeleteuser")) {
+      const parts    = text.split(" ");
+      const username = parts[1]?.replace("@", "").trim();
+      const days     = parseInt(parts[2]) || 1;
+      if (!username) {
+        return sendMessage(chatId,
+          `⚠️ Usage: \`/tgdeleteuser <username> [days]\`\n\nExample: \`/tgdeleteuser abhinayxsingh 7\`\nDeletes all issue/feedback records from that user in the last N days (default: 1 day).`
+        );
+      }
+      const { deleteByUsername } = require("./database");
+      const removed = await deleteByUsername(username, days);
+      if (!removed.length) {
+        return sendMessage(chatId, `⚠️ No records found for *${username}* in the last ${days} day${days > 1 ? "s" : ""}.`);
+      }
+      await sendMessage(chatId,
+        `✅ Deleted *${removed.length}* record${removed.length > 1 ? "s" : ""} from *${username}*:\n` +
+        removed.map(r => `🗑️ ${r.category}: _${r.message_text?.slice(0, 60)}..._`).join("\n")
+      );
+
     } else if (text.startsWith("/tgdelete")) {
       const messageId = text.split(" ")[1]?.trim();
       if (!messageId) return sendMessage(chatId, "⚠️ Usage: `/tgdelete <message_id>`");
@@ -225,35 +244,6 @@ async function handleCommand(msg) {
       ).join("\n\n");
 
       await sendMessage(chatId, `🔍 *Records matching "${username}":*\n\n${result}`);
-
-    } else if (text.startsWith("/tgdeleteuser")) {
-      // Usage: /tgdeleteuser <username> [days]
-      // Deletes all issue/feedback records from a user within the last N days
-      const parts    = text.split(" ");
-      const username = parts[1]?.replace("@", "").trim();
-      const days     = parseInt(parts[2]) || 1;
-
-      if (!username) {
-        return sendMessage(chatId,
-          `⚠️ Usage: \`/tgdeleteuser <username> [days]\`\n\n` +
-          `Example: \`/tgdeleteuser abhinayxsingh 1\`\n` +
-          `Deletes all issue/feedback records from that user in the last N days (default: 1 day).`
-        );
-      }
-
-      const { deleteByUsername } = require("./database");
-      const removed = await deleteByUsername(username, days);
-
-      if (!removed.length) {
-        return sendMessage(chatId,
-          `⚠️ No issue/feedback records found for *${username}* in the last ${days} day${days > 1 ? "s" : ""}.`
-        );
-      }
-
-      await sendMessage(chatId,
-        `✅ Deleted *${removed.length}* record${removed.length > 1 ? "s" : ""} from *${username}*:\n` +
-        removed.map(r => `🗑️ ${r.category}: _${r.message_text?.slice(0, 60)}..._`).join("\n")
-      );
 
     } else if (text.startsWith("/tgclean")) {
       const { before, deleted } = await cleanOldRecords();

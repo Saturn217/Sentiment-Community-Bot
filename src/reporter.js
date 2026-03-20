@@ -248,35 +248,34 @@ async function buildWeeklyDigest() {
     const dayMsgs  = dayRows.reduce((s, r) => s + r.message_count, 0);
     const dayScore = dayRows.reduce((s, r) => s + r.avg_score * r.message_count, 0) / (dayMsgs || 1);
     const arrow    = dayScore > 0.05 ? "📈" : dayScore < -0.05 ? "📉" : "➡️";
-    const words    = scoreToWords(dayScore);
-    const short    = formatDate(date);
-    return `${arrow} **${short}** — ${words} · ${dayMsgs} msg${dayMsgs !== 1 ? "s" : ""}`;
+    return `${arrow} **${formatDate(date)}** — ${scoreToWords(dayScore)} · ${dayMsgs} msgs`;
   }).join("\n") || "No data.";
 
   const communityText = communities.length > 0
     ? communities.map(({ community, platform, message_count, avg_score, positive_count, negative_count }) => {
         const plat = platform === "telegram" ? "📱" : "💬";
         const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        return `${mood}${plat} **${community}** — \`${avg_score.toFixed(3)}\` · ${message_count} msgs · 😊${positive_count} 😠${negative_count}`;
+        return `${mood}${plat} **${community}** — ${scoreToWords(avg_score)} · ${message_count} msgs`;
       }).join("\n")
     : "No community data.";
 
   const topUsersText = topUsers.length > 0
     ? topUsers.slice(0, 5).map(({ username, community, message_count, avg_score }) => {
         const mood = avg_score > 0.05 ? "😊" : avg_score < -0.05 ? "😤" : "😐";
-        return `${mood} **${username}** (${community}) — ${message_count} msgs · avg \`${avg_score.toFixed(3)}\``;
+        return `${mood} **${username}** (${community}) — ${message_count} msgs · ${scoreToWords(avg_score)}`;
       }).join("\n")
     : "Not enough data this week (min. 5 messages).";
 
+  // Limit each issue/feedback to 80 chars to stay within Discord's 1024 char field limit
   const issuesText = issues.length > 0
     ? issues.slice(0, 5).map(({ username, community, message_text }) =>
-        `🔴 **${username}** [${community}]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
+        `🔴 **${username}** [${community}]\n> ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
       ).join("\n")
     : "✅ No issues this week!";
 
   const feedbackText = feedback.length > 0
     ? feedback.slice(0, 5).map(({ username, community, message_text }) =>
-        `💬 **${username}** [${community}]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
+        `💬 **${username}** [${community}]\n> ${message_text?.slice(0, 80)}${message_text?.length > 80 ? "..." : ""}`
       ).join("\n")
     : "📭 No feedback this week.";
 
@@ -289,13 +288,13 @@ async function buildWeeklyDigest() {
       `**${weekRange}**\n\n` +
       `📨 **${totalMsgs}** messages · 😊 **${totalPositive}** positive · 😠 **${totalNegative}** negative · 😐 **${totalNeutral}** neutral\n` +
       `🐛 **${totalIssues}** issues · 💡 **${totalFeedback}** feedback items\n` +
-      `Overall score: \`${overallScore.toFixed(3)}\``
+      `Overall mood: ${scoreToWords(overallScore)}`
     )
     .setColor(embedColor)
     .addFields(
-      { name: "📅 Day-by-Day Trend",          value: trendText,     inline: false },
-      { name: "🌐 Community Performance",      value: communityText, inline: false },
-      { name: "🏆 Top Contributors This Week", value: topUsersText,  inline: false },
+      { name: "📅 Day-by-Day Trend",          value: trendText     || "No data", inline: false },
+      { name: "🌐 Community Performance",      value: communityText || "No data", inline: false },
+      { name: "🏆 Top Contributors This Week", value: topUsersText,               inline: false },
       { name: `🐛 Top Issues (${issues.length})`,    value: issuesText,   inline: false },
       { name: `💡 Top Feedback (${feedback.length})`,value: feedbackText, inline: false },
     )
@@ -318,23 +317,33 @@ async function buildWeeklyDigestTelegram() {
   const { emoji: moodEmoji, label: moodLabel } = getMood(overallScore);
 
   const communityText = communities.map(({ community, platform, message_count, avg_score }) => {
-    const plat = platform === "telegram" ? "📱" : "💬";
-    const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-    return `${mood}${plat} *${community}* — \`${avg_score.toFixed(3)}\` · ${message_count} msgs`;
+    const plat  = platform === "telegram" ? "📱" : "💬";
+    const mood  = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+    const words = scoreToWords(avg_score);
+    return `${mood}${plat} *${community}* — ${words} · ${message_count} msgs`;
   }).join("\n") || "No data.";
 
   const issuesText = issues.slice(0, 3).map(({ username, community, message_text }) =>
-    `🔴 *${username}* \\[${community}\\]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
-  ).join("\n") || "✅ No issues this week!";
+    `🔴 *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 150)}${message_text?.length > 150 ? "..." : ""}_`
+  ).join("\n\n") || "✅ No issues this week!";
 
   const feedbackText = feedback.slice(0, 3).map(({ username, community, message_text }) =>
-    `💬 *${username}* \\[${community}\\]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
-  ).join("\n") || "📭 No feedback this week.";
+    `💬 *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 150)}${message_text?.length > 150 ? "..." : ""}_`
+  ).join("\n\n") || "📭 No feedback this week.";
 
   const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 7);
   const weekRange = `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
 
-  return `📋 *Weekly Digest — ${moodEmoji} ${moodLabel}*\n📅 ${weekRange}\n\n📨 *${totalMsgs}* messages · 🐛 *${totalIssues}* issues · 💡 *${totalFeedback}* feedback\n\n🌐 *Community Performance*\n${communityText}\n\n🐛 *Top Issues This Week*\n${issuesText}\n\n💡 *Top Feedback This Week*\n${feedbackText}\n\n_Sentiment Bot • Weekly Digest_`;
+  // Return as array of 2 messages to avoid Telegram 4096 char limit
+  return [
+    `📋 *Weekly Digest — ${moodEmoji} ${moodLabel}*\n📅 ${weekRange}\n\n` +
+    `📨 *${totalMsgs}* messages · 🐛 *${totalIssues}* issues · 💡 *${totalFeedback}* feedback\n\n` +
+    `🌐 *Community Performance*\n${communityText}`,
+
+    `🐛 *Top Issues This Week*\n${issuesText}\n\n` +
+    `💡 *Top Feedback This Week*\n${feedbackText}\n\n` +
+    `_Sentiment Bot • Weekly Digest_`
+  ];
 }
 
 // ─── Send Functions ───────────────────────────────────────────────────────────

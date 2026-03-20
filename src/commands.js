@@ -22,20 +22,16 @@ const commands = [
       let totalMsgs = 0, weightedScore = 0, summaryText = "";
       summary.forEach(({ label, count, avg_score }) => {
         const emoji = label === "positive" ? "🟢" : label === "negative" ? "🔴" : "🟡";
-        summaryText += `${emoji} **${label}**: ${count} msgs (avg: \`${avg_score.toFixed(3)}\`)\n`;
+        summaryText += `${emoji} **${label}**: ${count} msgs\n`;
         totalMsgs += count; weightedScore += avg_score * count;
       });
-      const trendText = trend.map(({ date, avg_score, message_count }) => {
-        const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
-        return `${arrow} \`${date}\` — \`${avg_score.toFixed(3)}\` (${message_count} msgs)`;
-      }).join("\n") || "Not enough data yet.";
-
-      const overall = totalMsgs > 0 ? weightedScore / totalMsgs : 0;
+      const overall     = totalMsgs > 0 ? weightedScore / totalMsgs : 0;
+      const overallWord = overall > 0.3 ? "🔥 Very happy" : overall > 0.1 ? "😄 Happy" : overall > 0.02 ? "🙂 Mostly positive" : overall > -0.02 ? "😐 Mixed / neutral" : overall > -0.1 ? "😕 A bit negative" : overall > -0.3 ? "😠 Unhappy" : "🚨 Very unhappy";
       return interaction.editReply({ embeds: [
         new EmbedBuilder()
           .setTitle(`📊 Sentiment — Last ${days} Day${days > 1 ? "s" : ""}`)
           .setColor(overall > 0.05 ? 0x2ecc71 : overall < -0.05 ? 0xe74c3c : 0xf39c12)
-          .setDescription(`**${totalMsgs}** messages analyzed across all communities`)
+          .setDescription(`**${totalMsgs}** messages · Overall mood: ${overallWord}`)
           .addFields({ name: "Breakdown", value: summaryText || "No data", inline: false }, { name: "Trend", value: trendText, inline: false })
           .setTimestamp()
       ]});

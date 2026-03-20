@@ -7,7 +7,7 @@ const path  = require("path");
 const cron  = require("node-cron");
 
 const { analyzeSentiment }                                              = require("./sentiment");
-const { classifyMessage, loadCustomKeywords }                           = require("./classifier");
+const { classifyMessage, loadCustomKeywords, isSpam }                      = require("./classifier");
 const { initDB, insertSentiment, deleteByMessageId, getDashboardData }  = require("./database");
 const { sendDailyReport, sendWeeklyDigest, buildWeeklyDigestTelegram }  = require("./reporter");
 const { startTelegramBot, sendTelegramDailyReport, sendTelegramMessage } = require("./telegram");
@@ -84,9 +84,13 @@ function scheduleReports() {
     cron.schedule(weeklyCron, async () => {
       console.log("📋 Running weekly digest...");
       await sendWeeklyDigest(client);
-      const tgText     = await buildWeeklyDigestTelegram();
+      const tgParts    = await buildWeeklyDigestTelegram();
       const reportChat = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
-      if (reportChat) await sendTelegramMessage(reportChat, tgText);
+      if (reportChat) {
+        for (const part of tgParts) {
+          await sendTelegramMessage(reportChat, part);
+        }
+      }
     });
     console.log(`📋 Weekly digest scheduled: "${weeklyCron}" (every Monday)`);
   }
@@ -130,6 +134,12 @@ client.on("messageCreate", async (message) => {
     .replace(/https?:\/\/\S+/g, "")
     .trim();
   if (stripped.length < 5) return;
+
+  // Skip spam messages entirely — never track them
+  if (isSpam(stripped)) {
+    console.log(`🚫 Spam detected from ${message.author.username}, skipping`);
+    return;
+  }
 
   const { score, label } = analyzeSentiment(stripped);
   const category         = classifyMessage(stripped);

@@ -128,7 +128,10 @@ async function handleCommand(msg) {
 
     } else if (text.startsWith("/weeklyreport")) {
       await sendMessage(chatId, "⏳ Generating weekly digest...");
-      await sendMessage(chatId, await buildWeeklyDigestTelegram());
+      const parts = await buildWeeklyDigestTelegram();
+      for (const part of parts) {
+        await sendMessage(chatId, part);
+      }
 
     } else if (text.startsWith("/sentiment")) {
       const days    = parseInt(text.split(" ")[1]) || 7;
@@ -139,16 +142,36 @@ async function handleCommand(msg) {
       let totalMsgs = 0, weightedScore = 0, summaryText = "";
       summary.forEach(({ label, count, avg_score }) => {
         const emoji = label === "positive" ? "🟢" : label === "negative" ? "🔴" : "🟡";
-        summaryText += `${emoji} *${label}*: ${count} msgs (avg: \`${avg_score.toFixed(3)}\`)\n`;
+        const pct   = 0; // calculated after
+        summaryText += `${emoji} *${label}*: ${count} msgs\n`;
         totalMsgs += count; weightedScore += avg_score * count;
       });
-      let trendText = "";
-      trend.slice(-5).forEach(({ date, avg_score, message_count }) => {
-        const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
-        trendText += `${arrow} \`${date}\` — \`${avg_score > 0 ? "+" : ""}${avg_score.toFixed(3)}\` (${message_count} msgs)\n`;
+
+      // Add percentages now that we have totalMsgs
+      summaryText = "";
+      summary.forEach(({ label, count }) => {
+        const emoji = label === "positive" ? "🟢" : label === "negative" ? "🔴" : "🟡";
+        const pct   = totalMsgs > 0 ? Math.round((count / totalMsgs) * 100) : 0;
+        summaryText += `${emoji} *${label}*: ${count} msgs (${pct}%)\n`;
       });
+
+      const overall     = totalMsgs > 0 ? weightedScore / totalMsgs : 0;
+      const overallWord = overall > 0.3 ? "🔥 Very happy" : overall > 0.1 ? "😄 Happy" : overall > 0.02 ? "🙂 Mostly positive" : overall > -0.02 ? "😐 Mixed / neutral" : overall > -0.1 ? "😕 A bit negative" : overall > -0.3 ? "😠 Unhappy" : "🚨 Very unhappy";
+
+      let trendText = "";
+      trend.slice(-7).forEach(({ date, avg_score, message_count }) => {
+        const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
+        const short = new Date(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        const words = avg_score > 0.3 ? "Very happy" : avg_score > 0.1 ? "Happy" : avg_score > 0.02 ? "Mostly positive" : avg_score > -0.02 ? "Mixed" : avg_score > -0.1 ? "A bit negative" : avg_score > -0.3 ? "Unhappy" : "Very unhappy";
+        trendText += `${arrow} *${short}* — ${words} · ${message_count} msgs\n`;
+      });
+
       await sendMessage(chatId,
-        `📊 *Combined Sentiment — Last ${days} Day${days > 1 ? "s" : ""}*\n\n*Breakdown:*\n${summaryText}\n*Trend:*\n${trendText || "Not enough data yet."}`
+        `📊 *Combined Sentiment — Last ${days} Day${days > 1 ? "s" : ""}*\n\n` +
+        `*Overall mood:* ${overallWord}\n` +
+        `*Total messages:* ${totalMsgs}\n\n` +
+        `*Breakdown:*\n${summaryText}\n` +
+        `*Trend:*\n${trendText || "Not enough data yet."}`
       );
 
     } else if (text.startsWith("/channels")) {
@@ -156,9 +179,10 @@ async function handleCommand(msg) {
       const breakdown = await getChannelBreakdown(days);
       if (!breakdown.length) return sendMessage(chatId, "📭 No channel data yet.");
       const channelText = breakdown.map(({ community, channel_name, platform, avg_score, message_count }) => {
-        const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        const plat = platform === "telegram" ? "📱" : "💬";
-        return `${mood}${plat} *${community}/#${channel_name}* — \`${avg_score.toFixed(3)}\` · ${message_count} msgs`;
+        const mood  = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+        const plat  = platform === "telegram" ? "📱" : "💬";
+        const words = avg_score > 0.3 ? "Very happy" : avg_score > 0.1 ? "Happy" : avg_score > 0.02 ? "Mostly positive" : avg_score > -0.02 ? "Mixed" : avg_score > -0.1 ? "A bit negative" : "Unhappy";
+        return `${mood}${plat} *${community}/#${channel_name}* — ${words} · ${message_count} msgs`;
       }).join("\n");
       await sendMessage(chatId, `📡 *Channel Sentiment — Last ${days} Day${days > 1 ? "s" : ""}*\n\n${channelText}`);
 
@@ -192,9 +216,10 @@ async function handleCommand(msg) {
       const breakdown = await getCommunityBreakdown(7);
       if (!breakdown.length) return sendMessage(chatId, "📭 No community data yet.");
       const comText = breakdown.map(({ community, platform, message_count, avg_score, positive_count, negative_count }) => {
-        const plat = platform === "telegram" ? "📱" : "💬";
-        const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        return `${mood}${plat} *${community}*\n   ${message_count} msgs · avg: \`${avg_score.toFixed(3)}\` · 😊${positive_count} 😠${negative_count}`;
+        const plat  = platform === "telegram" ? "📱" : "💬";
+        const mood  = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+        const words = avg_score > 0.3 ? "Very happy" : avg_score > 0.1 ? "Happy" : avg_score > 0.02 ? "Mostly positive" : avg_score > -0.02 ? "Mixed" : avg_score > -0.1 ? "A bit negative" : "Unhappy";
+        return `${mood}${plat} *${community}*\n   ${message_count} msgs · ${words} · 😊${positive_count} 😠${negative_count}`;
       }).join("\n\n");
       await sendMessage(chatId, `🌐 *Community Breakdown — Last 7 Days*\n\n${comText}`);
 

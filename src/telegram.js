@@ -201,6 +201,31 @@ async function handleCommand(msg) {
       if (!removed) return sendMessage(chatId, `⚠️ No record found for message ID \`${messageId}\`.`);
       await sendMessage(chatId, `✅ Removed:\nID: \`${messageId}\`\nCategory: *${removed.category}*\nTracked at: \`${new Date(removed.timestamp).toLocaleString()}\``);
 
+    } else if (text.startsWith("/tgfind")) {
+      // Usage: /tgfind <username>
+      const username = text.split(" ").slice(1).join(" ").trim();
+      if (!username) return sendMessage(chatId, "⚠️ Usage: `/tgfind <username>`");
+
+      const { pool } = require("./database");
+      const { rows } = await pool.query(`
+        SELECT username, category, message_id, message_text, timestamp
+        FROM sentiment
+        WHERE username ILIKE $1
+          AND category IN ('issue','feedback')
+        ORDER BY timestamp DESC LIMIT 10
+      `, [`%${username}%`]);
+
+      if (!rows.length) return sendMessage(chatId, `📭 No records found matching *${username}*`);
+
+      const result = rows.map(r =>
+        `👤 *${r.username}* | ${r.category}\n` +
+        `🆔 \`${r.message_id || "no-id"}\`\n` +
+        `📅 ${new Date(r.timestamp).toLocaleDateString()}\n` +
+        `💬 _${r.message_text?.slice(0, 60)}..._`
+      ).join("\n\n");
+
+      await sendMessage(chatId, `🔍 *Records matching "${username}":*\n\n${result}`);
+
     } else if (text.startsWith("/tgdeleteuser")) {
       // Usage: /tgdeleteuser <username> [days]
       // Deletes all issue/feedback records from a user within the last N days

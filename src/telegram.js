@@ -5,7 +5,7 @@ const {
 } = require("./database");
 const { buildTelegramReport, buildWeeklyDigestTelegram } = require("./reporter");
 const { analyzeSentiment } = require("./sentiment");
-const { classifyMessage }  = require("./classifier");
+const { classifyMessage, isSpam } = require("./classifier");
 
 const TG_TOKEN          = process.env.TELEGRAM_TOKEN;
 const TG_REPORT_CHAT_ID = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
@@ -66,6 +66,12 @@ async function trackTelegramMessage(msg) {
 
   const stripped = text.replace(/https?:\/\/\S+/g, "").trim();
   if (stripped.length < 5) return;
+
+  // Skip spam messages entirely — never track them
+  if (isSpam(stripped)) {
+    console.log(`🚫 Spam detected from ${msg.from?.username || "unknown"}, skipping`);
+    return;
+  }
 
   const chatId    = String(msg.chat?.id);
   const community = CHAT_COMMUNITY_MAP[chatId] || `telegram_${chatId}`;
@@ -195,6 +201,35 @@ async function handleCommand(msg) {
       if (!removed) return sendMessage(chatId, `⚠️ No record found for message ID \`${messageId}\`.`);
       await sendMessage(chatId, `✅ Removed:\nID: \`${messageId}\`\nCategory: *${removed.category}*\nTracked at: \`${new Date(removed.timestamp).toLocaleString()}\``);
 
+    } else if (text.startsWith("/tgdeleteuser")) {
+      // Usage: /tgdeleteuser <username> [days]
+      // Deletes all issue/feedback records from a user within the last N days
+      const parts    = text.split(" ");
+      const username = parts[1]?.replace("@", "").trim();
+      const days     = parseInt(parts[2]) || 1;
+
+      if (!username) {
+        return sendMessage(chatId,
+          `⚠️ Usage: \`/tgdeleteuser <username> [days]\`\n\n` +
+          `Example: \`/tgdeleteuser abhinayxsingh 1\`\n` +
+          `Deletes all issue/feedback records from that user in the last N days (default: 1 day).`
+        );
+      }
+
+      const { deleteByUsername } = require("./database");
+      const removed = await deleteByUsername(username, days);
+
+      if (!removed.length) {
+        return sendMessage(chatId,
+          `⚠️ No issue/feedback records found for *${username}* in the last ${days} day${days > 1 ? "s" : ""}.`
+        );
+      }
+
+      await sendMessage(chatId,
+        `✅ Deleted *${removed.length}* record${removed.length > 1 ? "s" : ""} from *${username}*:\n` +
+        removed.map(r => `🗑️ ${r.category}: _${r.message_text?.slice(0, 60)}..._`).join("\n")
+      );
+
     } else if (text.startsWith("/tgclean")) {
       const { before, deleted } = await cleanOldRecords();
       const beforeText = before.map(({ category, total, no_id }) =>
@@ -249,7 +284,8 @@ async function handleCommand(msg) {
         `/feedback \\[days\\] — Recent feedback\n` +
         `/communities — All communities overview\n` +
         `/tgtrack \\[issue|feedback\\] \\[text\\] — Manually track a message \\(admin\\)\n` +
-        `/tgdelete \\[id\\] — Remove false positive \\(admin\\)\n` +
+        `/tgdelete \\[id\\] — Remove by message ID \\(admin\\)\n` +
+        `/tgdeleteuser \\[username\\] \\[days\\] — Remove all records from a user \\(admin\\)\n` +
         `/tgclean — Clean unverifiable records \\(admin\\)\n` +
         `/help — Show this message`
       );

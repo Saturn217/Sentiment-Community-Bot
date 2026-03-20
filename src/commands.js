@@ -212,6 +212,36 @@ const commands = [
     },
   },
 
+  // ── /deleteuser (admin only) ──────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName("deleteuser")
+      .setDescription("Delete all issue/feedback records from a specific user (admin only)")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+      .addStringOption(opt =>
+        opt.setName("username").setDescription("Username to remove records for e.g. abhinayxsingh").setRequired(true)
+      )
+      .addIntegerOption(opt =>
+        opt.setName("days").setDescription("How many days back to delete (default: 1)").setMinValue(1).setMaxValue(30).setRequired(false)
+      ),
+    async execute(interaction) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+      const username = interaction.options.getString("username").replace("@", "").trim();
+      const days     = interaction.options.getInteger("days") || 1;
+      const { deleteByUsername } = require("./database");
+      const removed  = await deleteByUsername(username, days);
+
+      if (!removed.length) {
+        return interaction.editReply(`⚠️ No issue/feedback records found for **${username}** in the last ${days} day${days > 1 ? "s" : ""}.`);
+      }
+
+      return interaction.editReply(
+        `✅ Deleted **${removed.length}** record${removed.length > 1 ? "s" : ""} from **${username}**:\n` +
+        removed.map(r => `🗑️ ${r.category}: ${r.message_text?.slice(0, 60)}...`).join("\n")
+      );
+    },
+  },
+
   // ── /track (admin only) ───────────────────────────────────────────────────
   {
     data: new SlashCommandBuilder()

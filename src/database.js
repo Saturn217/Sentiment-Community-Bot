@@ -76,7 +76,16 @@ async function deleteByMessageId(message_id) {
   return result.rows[0] || null;
 }
 
-async function cleanOldRecords() {
+async function deleteByUsername(username, days = 1) {
+  const { rows } = await pool.query(`
+    DELETE FROM sentiment
+    WHERE username = $1
+      AND timestamp >= NOW() - INTERVAL '${days} days'
+      AND category IN ('issue', 'feedback')
+    RETURNING id, category, message_text, timestamp
+  `, [username]);
+  return rows;
+}
   const { rows: before } = await pool.query(`
     SELECT category, COUNT(*)::int AS total,
       SUM(CASE WHEN message_id IS NULL THEN 1 ELSE 0 END)::int AS no_id
@@ -263,7 +272,7 @@ async function getDashboardData() {
 }
 
 module.exports = {
-  initDB, insertSentiment, deleteByMessageId, cleanOldRecords,
+  initDB, insertSentiment, deleteByMessageId, deleteByUsername, cleanOldRecords,
   getSummary, getTrend, getChannelBreakdown, getTopUsers, getTodayCount,
   getCommunityBreakdown, getCategorySummary, getRecentIssues, getRecentFeedback, getCategoryTrend,
   getCustomKeywords, addCustomKeyword, removeCustomKeyword,

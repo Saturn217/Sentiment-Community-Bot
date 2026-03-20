@@ -215,24 +215,88 @@ const commands = [
       .setDescription("Delete all issue/feedback records from a specific user (admin only)")
       .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
       .addStringOption(opt =>
-        opt.setName("username").setDescription("Username to remove records for e.g. abhinayxsingh").setRequired(true)
+        opt.setName("username").setDescription("Username to remove e.g. abhinayxsingh (use this OR mention)").setRequired(false)
+      )
+      .addUserOption(opt =>
+        opt.setName("user").setDescription("Mention the user directly e.g. @john_doe (use this OR username)").setRequired(false)
       )
       .addIntegerOption(opt =>
-        opt.setName("days").setDescription("How many days back to delete (default: 1)").setMinValue(1).setMaxValue(30).setRequired(false)
+        opt.setName("days").setDescription("How many days back to delete (default: 7)").setMinValue(1).setMaxValue(30).setRequired(false)
       ),
     async execute(interaction) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const username = interaction.options.getString("username").replace("@", "").trim();
-      const days     = interaction.options.getInteger("days") || 1;
-      const { deleteByUsername } = require("./database");
-      const removed  = await deleteByUsername(username, days);
+
+      const mentionedUser = interaction.options.getUser("user");
+      const usernameInput = interaction.options.getString("username")?.replace("@", "").trim();
+      const days          = interaction.options.getInteger("days") || 7;
+
+      if (!mentionedUser && !usernameInput) {
+        return interaction.editReply(
+          `⚠️ Please provide either:\n` +
+          `• A **username** e.g. \`/deleteuser username:abhinayxsingh\`\n` +
+          `• A **user mention** e.g. \`/deleteuser user:@john_doe\``
+        );
+      }
+
+      const { deleteByUsername, deleteByUserId } = require("./database");
+      let removed;
+      let displayName;
+
+      if (mentionedUser) {
+        // Delete by Discord user ID — most accurate
+        removed     = await deleteByUserId(mentionedUser.id, days);
+        displayName = `${mentionedUser.username} (ID: ${mentionedUser.id})`;
+      } else {
+        // Delete by username — works for TG users too
+        removed     = await deleteByUsername(usernameInput, days);
+        displayName = usernameInput;
+      }
 
       if (!removed.length) {
-        return interaction.editReply(`⚠️ No issue/feedback records found for **${username}** in the last ${days} day${days > 1 ? "s" : ""}.`);
+        return interaction.editReply(
+          `⚠️ No issue/feedback records found for **${displayName}** in the last ${days} day${days > 1 ? "s" : ""}.\n` +
+          `Try increasing the days range e.g. \`days: 30\`.`
+        );
       }
 
       return interaction.editReply(
-        `✅ Deleted **${removed.length}** record${removed.length > 1 ? "s" : ""} from **${username}**:\n` +
+        `✅ Deleted **${removed.length}** record${removed.length > 1 ? "s" : ""} from **${displayName}**:\n` +
+        removed.map(r => `🗑️ ${r.category}: ${r.message_text?.slice(0, 60)}...`).join("\n")
+      );
+    },
+  },
+
+  // ── /deleteuserid (admin only) ────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName("deleteuserid")
+      .setDescription("Delete all issue/feedback records by Discord user ID (admin only)")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+      .addStringOption(opt =>
+        opt.setName("user_id").setDescription("The Discord user ID e.g. 123456789012345678").setRequired(true)
+      )
+      .addIntegerOption(opt =>
+        opt.setName("days").setDescription("How many days back to delete (default: 7)").setMinValue(1).setMaxValue(30).setRequired(false)
+      ),
+    async execute(interaction) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const userId = interaction.options.getString("user_id").trim();
+      const days   = interaction.options.getInteger("days") || 7;
+
+      const { deleteByUserId } = require("./database");
+      const removed = await deleteByUserId(userId, days);
+
+      if (!removed.length) {
+        return interaction.editReply(
+          `⚠️ No issue/feedback records found for user ID \`${userId}\` in the last ${days} day${days > 1 ? "s" : ""}.\n` +
+          `Try increasing the days range e.g. \`days: 30\`.`
+        );
+      }
+
+      const username = removed[0]?.username || userId;
+      return interaction.editReply(
+        `✅ Deleted **${removed.length}** record${removed.length > 1 ? "s" : ""} from **${username}** (ID: \`${userId}\`):\n` +
         removed.map(r => `🗑️ ${r.category}: ${r.message_text?.slice(0, 60)}...`).join("\n")
       );
     },

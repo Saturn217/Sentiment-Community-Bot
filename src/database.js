@@ -86,6 +86,8 @@ async function deleteByUsername(username, days = 1) {
   `, [username]);
   return rows;
 }
+
+async function cleanOldRecords() {
   const { rows: before } = await pool.query(`
     SELECT category, COUNT(*)::int AS total,
       SUM(CASE WHEN message_id IS NULL THEN 1 ELSE 0 END)::int AS no_id
@@ -95,7 +97,7 @@ async function deleteByUsername(username, days = 1) {
     DELETE FROM sentiment WHERE category IN ('issue','feedback') AND message_id IS NULL
   `);
   return { before, deleted: rowCount };
-
+}
 
 // ─── Reads ────────────────────────────────────────────────────────────────────
 async function getSummary(days = 1) {

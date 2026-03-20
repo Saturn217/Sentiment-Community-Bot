@@ -95,7 +95,7 @@ async function deleteByUsername(username, days = 1) {
     DELETE FROM sentiment WHERE category IN ('issue','feedback') AND message_id IS NULL
   `);
   return { before, deleted: rowCount };
-}
+
 
 // ─── Reads ────────────────────────────────────────────────────────────────────
 async function getSummary(days = 1) {

@@ -210,15 +210,18 @@ async function buildTelegramReport() {
       }).join("\n")
     : "No community data yet.";
 
+  // Escape special chars in user content for Telegram Markdown
+  const tgEsc = str => (str || "").replace(/[_*[\]()~`>#+=|{}.!-]/g, "\\$&");
+
   const issuesText = recentIssues.length > 0
     ? recentIssues.map(({ username, community, message_text }) =>
-        `🔴 *${username}* \\[${community}\\]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
+        `🔴 *${tgEsc(username)}* \\[${tgEsc(community)}\\]: ${tgEsc(message_text?.slice(0, 150))}${message_text?.length > 150 ? "..." : ""}`
       ).join("\n")
     : "✅ No issues reported today!";
 
   const feedbackText = recentFeedback.length > 0
     ? recentFeedback.map(({ username, community, message_text }) =>
-        `💬 *${username}* \\[${community}\\]: ${message_text?.slice(0, 200)}${message_text?.length > 200 ? "..." : ""}`
+        `💬 *${tgEsc(username)}* \\[${tgEsc(community)}\\]: ${tgEsc(message_text?.slice(0, 150))}${message_text?.length > 150 ? "..." : ""}`
       ).join("\n")
     : "📭 No feedback submitted today.";
 
@@ -323,12 +326,17 @@ async function buildWeeklyDigestTelegram() {
     return `${mood}${plat} *${community}* — ${words} · ${message_count} msgs`;
   }).join("\n") || "No data.";
 
+  // Escape special chars in user-generated content for Telegram Markdown
+  function tgEscape(str) {
+    return (str || "").replace(/[_*[\]()~`>#+=|{}.!-]/g, "\\$&");
+  }
+
   const issuesText = issues.slice(0, 3).map(({ username, community, message_text }) =>
-    `🔴 *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 150)}${message_text?.length > 150 ? "..." : ""}_`
+    `🔴 *${tgEscape(username)}* \\[${tgEscape(community)}\\]:\n${tgEscape(message_text?.slice(0, 150))}${message_text?.length > 150 ? "..." : ""}`
   ).join("\n\n") || "✅ No issues this week!";
 
   const feedbackText = feedback.slice(0, 3).map(({ username, community, message_text }) =>
-    `💬 *${username}* \\[${community}\\]:\n_${message_text?.slice(0, 150)}${message_text?.length > 150 ? "..." : ""}_`
+    `💬 *${tgEscape(username)}* \\[${tgEscape(community)}\\]:\n${tgEscape(message_text?.slice(0, 150))}${message_text?.length > 150 ? "..." : ""}`
   ).join("\n\n") || "📭 No feedback this week.";
 
   const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 7);

@@ -128,9 +128,23 @@ async function handleCommand(msg) {
 
     } else if (text.startsWith("/weeklyreport")) {
       await sendMessage(chatId, "⏳ Generating weekly digest...");
-      const parts = await buildWeeklyDigestTelegram();
-      for (const part of parts) {
-        await sendMessage(chatId, part);
+      try {
+        const parts = await buildWeeklyDigestTelegram();
+        for (let i = 0; i < parts.length; i++) {
+          try {
+            await sendMessage(chatId, parts[i]);
+          } catch (partErr) {
+            console.error(`❌ Weekly digest part ${i + 1} failed:`, partErr.message);
+            // Send plain text fallback if Markdown fails
+            await tgRequest("sendMessage", {
+              chat_id: chatId,
+              text: parts[i].replace(/[*_`[\]()~>#+=|{}.!\\-]/g, ""),
+            });
+          }
+        }
+      } catch (err) {
+        console.error("❌ Weekly digest build failed:", err.message);
+        await sendMessage(chatId, "⚠️ Failed to generate weekly digest. Check logs.");
       }
 
     } else if (text.startsWith("/sentiment")) {

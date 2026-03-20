@@ -237,6 +237,60 @@ async function handleCommand(msg) {
       }).join("\n\n");
       await sendMessage(chatId, `🌐 *Community Breakdown — Last 7 Days*\n\n${comText}`);
 
+    } else if (text.startsWith("/pausereport")) {
+      const parts = text.split(" ");
+      const type  = parts[1]?.toLowerCase();
+      const times = parseInt(parts[2]) || null;
+
+      if (!type || !["daily", "weekly", "both"].includes(type)) {
+        return sendMessage(chatId,
+          `⚠️ Usage: \`/pausereport <daily|weekly|both> [times]\`\n\n` +
+          `Examples:\n` +
+          `\`/pausereport daily 1\` — skip tomorrow's report only\n` +
+          `\`/pausereport both 2\` — skip next 2 reports\n` +
+          `\`/pausereport daily\` — pause indefinitely`
+        );
+      }
+
+      const { reportState } = require("./bot");
+      if (type === "daily"  || type === "both") { reportState.dailyPaused  = true; reportState.dailySkipCount  = times || 0; reportState.dailyPausedUntil  = null; }
+      if (type === "weekly" || type === "both") { reportState.weeklyPaused = true; reportState.weeklySkipCount = times || 0; reportState.weeklyPausedUntil = null; }
+
+      const typeLabel  = type === "both" ? "Daily \\+ Weekly" : type === "daily" ? "Daily report" : "Weekly digest";
+      const timesLabel = times ? `for next *${times}* report${times > 1 ? "s" : ""} \\(auto\\-resumes after\\)` : "indefinitely";
+      await sendMessage(chatId, `⏸️ *${typeLabel}* paused ${timesLabel}\\.\nUse /resumereport to turn back on early\\.`);
+
+    } else if (text.startsWith("/resumereport")) {
+      const type = text.split(" ")[1]?.toLowerCase();
+
+      if (!type || !["daily", "weekly", "both"].includes(type)) {
+        return sendMessage(chatId, `⚠️ Usage: \`/resumereport <daily|weekly|both>\``);
+      }
+
+      const { reportState } = require("./bot");
+      if (type === "daily"  || type === "both") { reportState.dailyPaused  = false; reportState.dailyPausedUntil  = null; }
+      if (type === "weekly" || type === "both") { reportState.weeklyPaused = false; reportState.weeklyPausedUntil = null; }
+
+      const typeLabel = type === "both" ? "Daily \\+ Weekly reports" : type === "daily" ? "Daily report" : "Weekly digest";
+      await sendMessage(chatId, `▶️ *${typeLabel}* resumed\\. Reports will send at their next scheduled time\\.`);
+
+    } else if (text.startsWith("/reportstatus")) {
+      const { reportState } = require("./bot");
+
+      const dailyStatus  = reportState.dailyPaused
+        ? `⏸️ Paused${reportState.dailySkipCount > 0 ? ` — ${reportState.dailySkipCount} report${reportState.dailySkipCount !== 1 ? "s" : ""} left to skip` : " indefinitely"}`
+        : "▶️ Running";
+      const weeklyStatus = reportState.weeklyPaused
+        ? `⏸️ Paused${reportState.weeklySkipCount > 0 ? ` — ${reportState.weeklySkipCount} report${reportState.weeklySkipCount !== 1 ? "s" : ""} left to skip` : " indefinitely"}`
+        : "▶️ Running";
+
+      await sendMessage(chatId,
+        `📊 *Report Status*\n\n` +
+        `📅 Daily report: ${dailyStatus}\n` +
+        `📋 Weekly digest: ${weeklyStatus}\n\n` +
+        `_Both Discord and Telegram share the same status\\._`
+      );
+
     } else if (text.startsWith("/tgdeleteuser")) {
       const parts    = text.split(" ");
       const username = parts[1]?.replace("@", "").trim();
@@ -340,18 +394,23 @@ async function handleCommand(msg) {
     } else if (text.startsWith("/start") || text.startsWith("/help")) {
       await sendMessage(chatId,
         `👋 *Sentiment Bot*\n\nTracking sentiment across all your communities.\n\n` +
-        `*Commands:*\n` +
+        `*Report Commands:*\n` +
         `/report — Daily report\n` +
         `/weeklyreport — Weekly digest\n` +
+        `/pausereport \\[daily|weekly|both\\] \\[days\\] — Pause reports \\(admin\\)\n` +
+        `/resumereport \\[daily|weekly|both\\] — Resume reports \\(admin\\)\n` +
+        `/reportstatus — Check if reports are paused \\(admin\\)\n\n` +
+        `*Analytics Commands:*\n` +
         `/sentiment \\[days\\] — Sentiment summary\n` +
         `/channels \\[days\\] — Per\\-channel breakdown\n` +
         `/issues \\[days\\] — Recent issues\n` +
         `/feedback \\[days\\] — Recent feedback\n` +
-        `/communities — All communities overview\n` +
-        `/tgtrack \\[issue|feedback\\] \\[text\\] — Manually track a message \\(admin\\)\n` +
-        `/tgdelete \\[id\\] — Remove by message ID \\(admin\\)\n` +
-        `/tgdeleteuser \\[username\\] \\[days\\] — Remove all records from a user \\(admin\\)\n` +
-        `/tgclean — Clean unverifiable records \\(admin\\)\n` +
+        `/communities — All communities overview\n\n` +
+        `*Admin Commands:*\n` +
+        `/tgtrack \\[issue|feedback\\] \\[text\\] — Manually track a message\n` +
+        `/tgdelete \\[id\\] — Remove by message ID\n` +
+        `/tgdeleteuser \\[username\\] \\[days\\] — Remove all records from a user\n` +
+        `/tgclean — Clean unverifiable records\n` +
         `/help — Show this message`
       );
     }

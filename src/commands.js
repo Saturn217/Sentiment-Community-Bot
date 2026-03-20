@@ -266,6 +266,115 @@ const commands = [
     },
   },
 
+  // ── /pausereport (admin only) ─────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName("pausereport")
+      .setDescription("Pause automatic reports (admin only)")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+      .addStringOption(opt =>
+        opt.setName("type").setDescription("Which report to pause").setRequired(true)
+          .addChoices(
+            { name: "Daily report", value: "daily" },
+            { name: "Weekly digest", value: "weekly" },
+            { name: "Both", value: "both" }
+          )
+      )
+      .addIntegerOption(opt =>
+        opt.setName("times").setDescription("Skip next N reports e.g. 1 = skip tomorrow only. Leave empty to pause indefinitely").setMinValue(1).setMaxValue(30).setRequired(false)
+      ),
+    async execute(interaction) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const type  = interaction.options.getString("type");
+      const times = interaction.options.getInteger("times") || null;
+      const { reportState } = require("./bot");
+
+      if (type === "daily" || type === "both") {
+        reportState.dailyPaused     = true;
+        reportState.dailySkipCount  = times || 0;
+        reportState.dailyPausedUntil = null;
+      }
+      if (type === "weekly" || type === "both") {
+        reportState.weeklyPaused      = true;
+        reportState.weeklySkipCount   = times || 0;
+        reportState.weeklyPausedUntil = null;
+      }
+
+      const typeLabel  = type === "both" ? "Daily + Weekly reports" : type === "daily" ? "Daily report" : "Weekly digest";
+      const timesLabel = times
+        ? `for the next **${times}** report${times > 1 ? "s" : ""} — will auto-resume after`
+        : "indefinitely — use `/resumereport` to turn back on";
+
+      return interaction.editReply(
+        `⏸️ **${typeLabel}** paused ${timesLabel}.\n\n` +
+        `Both Discord and Telegram reports are affected.\n` +
+        `Check status anytime with \`/reportstatus\`.`
+      );
+    },
+  },
+
+  // ── /resumereport (admin only) ────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName("resumereport")
+      .setDescription("Resume automatic reports (admin only)")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+      .addStringOption(opt =>
+        opt.setName("type").setDescription("Which report to resume").setRequired(true)
+          .addChoices(
+            { name: "Daily report", value: "daily" },
+            { name: "Weekly digest", value: "weekly" },
+            { name: "Both", value: "both" }
+          )
+      ),
+    async execute(interaction) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const type = interaction.options.getString("type");
+      const { reportState } = require("./bot");
+
+      if (type === "daily" || type === "both") {
+        reportState.dailyPaused      = false;
+        reportState.dailyPausedUntil = null;
+      }
+      if (type === "weekly" || type === "both") {
+        reportState.weeklyPaused      = false;
+        reportState.weeklyPausedUntil = null;
+      }
+
+      const typeLabel = type === "both" ? "Daily + Weekly reports" : type === "daily" ? "Daily report" : "Weekly digest";
+      return interaction.editReply(`▶️ **${typeLabel}** resumed. Reports will send at their next scheduled time.`);
+    },
+  },
+
+  // ── /reportstatus (admin only) ────────────────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName("reportstatus")
+      .setDescription("Check if reports are paused or running (admin only)")
+      .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+    async execute(interaction) {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      const { reportState } = require("./bot");
+
+      const dailyStatus  = reportState.dailyPaused
+        ? `⏸️ Paused${reportState.dailySkipCount > 0 ? ` — ${reportState.dailySkipCount} report${reportState.dailySkipCount !== 1 ? "s" : ""} left to skip` : " indefinitely"}`
+        : "▶️ Running";
+      const weeklyStatus = reportState.weeklyPaused
+        ? `⏸️ Paused${reportState.weeklySkipCount > 0 ? ` — ${reportState.weeklySkipCount} report${reportState.weeklySkipCount !== 1 ? "s" : ""} left to skip` : " indefinitely"}`
+        : "▶️ Running";
+
+      return interaction.editReply(
+        `📊 **Report Status**\n\n` +
+        `📅 Daily report: ${dailyStatus}\n` +
+        `📋 Weekly digest: ${weeklyStatus}\n\n` +
+        `_Both Discord and Telegram reports share the same status._`
+      );
+    },
+  },
+
   // ── /deleteuserid (admin only) ────────────────────────────────────────────
   {
     data: new SlashCommandBuilder()

@@ -66,11 +66,77 @@ async function registerCommandsForGuild(guildId) {
 }
 
 // ─── Schedule Reports ─────────────────────────────────────────────────────────
+// ─── Report Pause State ───────────────────────────────────────────────────────
+const reportState = {
+  dailyPaused:        false,
+  weeklyPaused:       false,
+  dailySkipCount:     0,    // skip next N daily reports
+  weeklySkipCount:    0,    // skip next N weekly reports
+  dailyPausedUntil:   null, // human-readable resume date for display
+  weeklyPausedUntil:  null,
+};
+
+function isReportPaused(type) {
+  if (type === "daily") {
+    if (!reportState.dailyPaused) return false;
+    // If skip-count mode, don't auto-expire by time
+    if (reportState.dailySkipCount > 0) return true;
+    // If time-based indefinite pause
+    if (!reportState.dailyPausedUntil) return true;
+    // Auto-resume if time expired
+    if (new Date() > reportState.dailyPausedUntil) {
+      reportState.dailyPaused = false;
+      reportState.dailyPausedUntil = null;
+      return false;
+    }
+    return true;
+  }
+  if (type === "weekly") {
+    if (!reportState.weeklyPaused) return false;
+    if (reportState.weeklySkipCount > 0) return true;
+    if (!reportState.weeklyPausedUntil) return true;
+    if (new Date() > reportState.weeklyPausedUntil) {
+      reportState.weeklyPaused = false;
+      reportState.weeklyPausedUntil = null;
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
+
+function consumeSkip(type) {
+  if (type === "daily" && reportState.dailySkipCount > 0) {
+    reportState.dailySkipCount--;
+    if (reportState.dailySkipCount === 0) {
+      reportState.dailyPaused      = false;
+      reportState.dailyPausedUntil = null;
+      console.log("▶️  Daily report auto-resumed after skip.");
+    }
+  }
+  if (type === "weekly" && reportState.weeklySkipCount > 0) {
+    reportState.weeklySkipCount--;
+    if (reportState.weeklySkipCount === 0) {
+      reportState.weeklyPaused      = false;
+      reportState.weeklyPausedUntil = null;
+      console.log("▶️  Weekly digest auto-resumed after skip.");
+    }
+  }
+}
+
+// Export so commands.js and telegram.js can use it
+module.exports = { reportState, isReportPaused };
+
 function scheduleReports() {
   // Daily — default 9am UTC every day
   const dailyCron = process.env.REPORT_CRON || "0 9 * * *";
   if (cron.validate(dailyCron)) {
     cron.schedule(dailyCron, async () => {
+      if (isReportPaused("daily")) {
+        console.log(`⏸️  Daily report skipped (${reportState.dailySkipCount} skip${reportState.dailySkipCount !== 1 ? "s" : ""} remaining).`);
+        consumeSkip("daily");
+        return;
+      }
       console.log("⏰ Running daily sentiment report...");
       await sendDailyReport(client);
       await sendTelegramDailyReport();
@@ -82,6 +148,11 @@ function scheduleReports() {
   const weeklyCron = process.env.WEEKLY_CRON || "0 9 * * 1";
   if (cron.validate(weeklyCron)) {
     cron.schedule(weeklyCron, async () => {
+      if (isReportPaused("weekly")) {
+        console.log(`⏸️  Weekly digest skipped (${reportState.weeklySkipCount} skip${reportState.weeklySkipCount !== 1 ? "s" : ""} remaining).`);
+        consumeSkip("weekly");
+        return;
+      }
       console.log("📋 Running weekly digest...");
       await sendWeeklyDigest(client);
       const tgParts    = await buildWeeklyDigestTelegram();

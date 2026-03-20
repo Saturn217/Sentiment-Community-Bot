@@ -77,6 +77,17 @@ async function trackTelegramMessage(msg) {
   const community = CHAT_COMMUNITY_MAP[chatId] || `telegram_${chatId}`;
   const msgKey    = `${chatId}:${msg.message_id}`;
 
+  // Detect topic/sub-group name
+  // Messages in a topic have message_thread_id and forum_topic_created or reply_to_message
+  const topicName = msg.reply_to_message?.forum_topic_created?.name  // topic messages reference the topic creation
+                 || msg.forum_topic_created?.name                      // the topic creation message itself
+                 || null;
+
+  // Use topic name as channel if available, otherwise fall back to group title
+  const channelName = topicName
+    ? `${msg.chat?.title || community} › ${topicName}`
+    : (msg.chat?.title || community);
+
   const { score, label } = analyzeSentiment(stripped);
   const category         = classifyMessage(stripped);
 
@@ -84,8 +95,8 @@ async function trackTelegramMessage(msg) {
     message_id:   String(msg.message_id),
     user_id:      String(msg.from?.id || "unknown"),
     username:     msg.from?.username || msg.from?.first_name || "unknown",
-    channel_id:   chatId,
-    channel_name: msg.chat?.title || community,
+    channel_id:   msg.message_thread_id ? `${chatId}_${msg.message_thread_id}` : chatId,
+    channel_name: channelName,
     score, label, category,
     message_text: stripped.slice(0, 1000),
     community,
@@ -96,7 +107,7 @@ async function trackTelegramMessage(msg) {
     pendingTgMsgs.delete(msgKey);
     try {
       await insertSentiment(payload);
-      console.log(`📨 Tracked [${community}] ${label} (${category}) from ${payload.username}`);
+      console.log(`📨 Tracked [${community}${topicName ? ` › ${topicName}` : ""}] ${label} (${category}) from ${payload.username}`);
     } catch (err) {
       console.error("❌ Failed to track Telegram message:", err.message);
     }

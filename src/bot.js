@@ -6,11 +6,12 @@ const fs    = require("fs");
 const path  = require("path");
 const cron  = require("node-cron");
 
-const { analyzeSentiment }                                              = require("./sentiment");
-const { classifyMessage, loadCustomKeywords, isSpam }                      = require("./classifier");
-const { initDB, insertSentiment, deleteByMessageId, getDashboardData }  = require("./database");
-const { sendDailyReport, sendWeeklyDigest, buildWeeklyDigestTelegram }  = require("./reporter");
+const { analyzeSentiment }                                             = require("./sentiment");
+const { classifyMessage, loadCustomKeywords, isSpam }                  = require("./classifier");
+const { initDB, insertSentiment, deleteByMessageId, getDashboardData } = require("./database");
+const { sendDailyReport, sendWeeklyDigest, buildWeeklyDigestTelegram } = require("./reporter");
 const { startTelegramBot, sendTelegramDailyReport, sendTelegramMessage } = require("./telegram");
+const { reportState, isReportPaused, consumeSkip }                    = require("./reportState");
 const commands = require("./commands");
 
 // ─── Community Config ─────────────────────────────────────────────────────────
@@ -66,74 +67,12 @@ async function registerCommandsForGuild(guildId) {
 }
 
 // ─── Schedule Reports ─────────────────────────────────────────────────────────
-// ─── Report Pause State ───────────────────────────────────────────────────────
-const reportState = {
-  dailyPaused:        false,
-  weeklyPaused:       false,
-  dailySkipCount:     0,    // skip next N daily reports
-  weeklySkipCount:    0,    // skip next N weekly reports
-  dailyPausedUntil:   null, // human-readable resume date for display
-  weeklyPausedUntil:  null,
-};
-
-function isReportPaused(type) {
-  if (type === "daily") {
-    if (!reportState.dailyPaused) return false;
-    // If skip-count mode, don't auto-expire by time
-    if (reportState.dailySkipCount > 0) return true;
-    // If time-based indefinite pause
-    if (!reportState.dailyPausedUntil) return true;
-    // Auto-resume if time expired
-    if (new Date() > reportState.dailyPausedUntil) {
-      reportState.dailyPaused = false;
-      reportState.dailyPausedUntil = null;
-      return false;
-    }
-    return true;
-  }
-  if (type === "weekly") {
-    if (!reportState.weeklyPaused) return false;
-    if (reportState.weeklySkipCount > 0) return true;
-    if (!reportState.weeklyPausedUntil) return true;
-    if (new Date() > reportState.weeklyPausedUntil) {
-      reportState.weeklyPaused = false;
-      reportState.weeklyPausedUntil = null;
-      return false;
-    }
-    return true;
-  }
-  return false;
-}
-
-function consumeSkip(type) {
-  if (type === "daily" && reportState.dailySkipCount > 0) {
-    reportState.dailySkipCount--;
-    if (reportState.dailySkipCount === 0) {
-      reportState.dailyPaused      = false;
-      reportState.dailyPausedUntil = null;
-      console.log("▶️  Daily report auto-resumed after skip.");
-    }
-  }
-  if (type === "weekly" && reportState.weeklySkipCount > 0) {
-    reportState.weeklySkipCount--;
-    if (reportState.weeklySkipCount === 0) {
-      reportState.weeklyPaused      = false;
-      reportState.weeklyPausedUntil = null;
-      console.log("▶️  Weekly digest auto-resumed after skip.");
-    }
-  }
-}
-
-// Export so commands.js and telegram.js can use it
-module.exports = { reportState, isReportPaused };
-
 function scheduleReports() {
-  // Daily — default 9am UTC every day
   const dailyCron = process.env.REPORT_CRON || "0 9 * * *";
   if (cron.validate(dailyCron)) {
     cron.schedule(dailyCron, async () => {
       if (isReportPaused("daily")) {
-        console.log(`⏸️  Daily report skipped (${reportState.dailySkipCount} skip${reportState.dailySkipCount !== 1 ? "s" : ""} remaining).`);
+        console.log(`⏸️  Daily report skipped (${reportState.dailySkipCount} remaining).`);
         consumeSkip("daily");
         return;
       }
@@ -144,12 +83,11 @@ function scheduleReports() {
     console.log(`📅 Daily report scheduled: "${dailyCron}"`);
   }
 
-  // Weekly — every Monday 9am UTC
   const weeklyCron = process.env.WEEKLY_CRON || "0 9 * * 1";
   if (cron.validate(weeklyCron)) {
     cron.schedule(weeklyCron, async () => {
       if (isReportPaused("weekly")) {
-        console.log(`⏸️  Weekly digest skipped (${reportState.weeklySkipCount} skip${reportState.weeklySkipCount !== 1 ? "s" : ""} remaining).`);
+        console.log(`⏸️  Weekly digest skipped (${reportState.weeklySkipCount} remaining).`);
         consumeSkip("weekly");
         return;
       }
@@ -187,10 +125,8 @@ client.once("clientReady", async () => {
 });
 
 // ─── 30-Second Delay Queue ────────────────────────────────────────────────────
-// Messages are held in memory for 30s before saving to DB.
-// If automod deletes them in that window, they never reach the database.
 const TRACK_DELAY_MS  = 30 * 1000;
-const pendingMessages = new Map(); // message_id → timeout
+const pendingMessages = new Map();
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
@@ -206,7 +142,6 @@ client.on("messageCreate", async (message) => {
     .trim();
   if (stripped.length < 5) return;
 
-  // Skip spam messages entirely — never track them
   if (isSpam(stripped)) {
     console.log(`🚫 Spam detected from ${message.author.username}, skipping`);
     return;
@@ -228,7 +163,6 @@ client.on("messageCreate", async (message) => {
     platform: "discord",
   };
 
-  // Schedule DB save after 30s delay
   const timeout = setTimeout(async () => {
     pendingMessages.delete(message.id);
     try { await insertSentiment(payload); }
@@ -240,14 +174,12 @@ client.on("messageCreate", async (message) => {
 
 // ─── Handle Deleted Messages ──────────────────────────────────────────────────
 client.on("messageDelete", async (message) => {
-  // Still in the 30s queue? Cancel it — never saved
   if (pendingMessages.has(message.id)) {
     clearTimeout(pendingMessages.get(message.id));
     pendingMessages.delete(message.id);
     console.log(`🗑️  Cancelled pending message — deleted before tracking`);
     return;
   }
-  // Already saved? Remove from DB
   try {
     const removed = await deleteByMessageId(message.id);
     if (removed) console.log(`🗑️  Removed ${removed.category} message from DB`);
@@ -256,7 +188,6 @@ client.on("messageDelete", async (message) => {
   }
 });
 
-// Handle bulk deletes (mod purge)
 client.on("messageDeleteBulk", async (messages) => {
   for (const message of messages.values()) {
     if (pendingMessages.has(message.id)) {

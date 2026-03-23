@@ -288,7 +288,7 @@ const commands = [
 
       const type  = interaction.options.getString("type");
       const times = interaction.options.getInteger("times") || null;
-      const { reportState } = require("./bot");
+      const { reportState } = require("./reportState");
 
       if (type === "daily" || type === "both") {
         reportState.dailyPaused     = true;
@@ -332,7 +332,7 @@ const commands = [
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
       const type = interaction.options.getString("type");
-      const { reportState } = require("./bot");
+      const { reportState } = require("./reportState");
 
       if (type === "daily" || type === "both") {
         reportState.dailyPaused      = false;
@@ -357,7 +357,7 @@ const commands = [
     async execute(interaction) {
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-      const { reportState } = require("./bot");
+      const { reportState } = require("./reportState");
 
       const dailyStatus  = reportState.dailyPaused
         ? `⏸️ Paused${reportState.dailySkipCount > 0 ? ` — ${reportState.dailySkipCount} report${reportState.dailySkipCount !== 1 ? "s" : ""} left to skip` : " indefinitely"}`

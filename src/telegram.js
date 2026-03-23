@@ -252,7 +252,7 @@ async function handleCommand(msg) {
         );
       }
 
-      const { reportState } = require("./bot");
+      const { reportState } = require("./reportState");
       if (type === "daily"  || type === "both") { reportState.dailyPaused  = true; reportState.dailySkipCount  = times || 0; reportState.dailyPausedUntil  = null; }
       if (type === "weekly" || type === "both") { reportState.weeklyPaused = true; reportState.weeklySkipCount = times || 0; reportState.weeklyPausedUntil = null; }
 
@@ -267,7 +267,7 @@ async function handleCommand(msg) {
         return sendMessage(chatId, `⚠️ Usage: \`/resumereport <daily|weekly|both>\``);
       }
 
-      const { reportState } = require("./bot");
+      const { reportState } = require("./reportState");
       if (type === "daily"  || type === "both") { reportState.dailyPaused  = false; reportState.dailyPausedUntil  = null; }
       if (type === "weekly" || type === "both") { reportState.weeklyPaused = false; reportState.weeklyPausedUntil = null; }
 
@@ -275,7 +275,7 @@ async function handleCommand(msg) {
       await sendMessage(chatId, `▶️ *${typeLabel}* resumed\\. Reports will send at their next scheduled time\\.`);
 
     } else if (text.startsWith("/reportstatus")) {
-      const { reportState } = require("./bot");
+      const { reportState } = require("./reportState");
 
       const dailyStatus  = reportState.dailyPaused
         ? `⏸️ Paused${reportState.dailySkipCount > 0 ? ` — ${reportState.dailySkipCount} report${reportState.dailySkipCount !== 1 ? "s" : ""} left to skip` : " indefinitely"}`

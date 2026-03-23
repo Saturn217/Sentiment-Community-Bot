@@ -17,6 +17,37 @@ const FEEDBACK_KEYWORDS = [
   "wishlist", "nice to have", "missing feature", "lacks", "needs",
 ];
 
+// ─── Spam Patterns ────────────────────────────────────────────────────────────
+// Messages matching any of these are ignored entirely — never tracked
+const SPAM_PATTERNS = [
+  /terabox/i,
+  /sign.?up.*watch/i,
+  /full.*movie.*download/i,
+  /download.*movie/i,
+  /480p|720p|1080p/i,
+  /➠|➤|➥/,                          // common spam arrow chars
+  /t\.me\/\S+/i,                     // Telegram invite links
+  /bit\.ly|tinyurl|shorturl/i,       // link shorteners
+  /earn \$\d+|make money|passive income/i,
+  /free.*crypto|airdrop.*claim/i,
+  /click here.*link|link.*click here/i,
+  /\b(porn|xxx|adult|nude|sex)\b/i,  // adult content
+  /casino|gambling|betting site/i,
+  /whatsapp.*group.*join|join.*whatsapp/i,
+];
+
+/** Returns true if the message looks like spam and should be ignored */
+function isSpam(text) {
+  const lower = text.toLowerCase();
+  // Too many URLs in one message = spam
+  const urlCount = (text.match(/https?:\/\/\S+/g) || []).length;
+  if (urlCount >= 3) return true;
+  // Too many special arrow/bullet chars = spam
+  const arrowCount = (text.match(/[➠➤➥►▶→]/g) || []).length;
+  if (arrowCount >= 2) return true;
+  return SPAM_PATTERNS.some(pattern => pattern.test(text));
+}
+
 // Custom keywords loaded from DB into memory on startup
 let customIssueKeywords    = [];
 let customFeedbackKeywords = [];
@@ -49,4 +80,4 @@ function getAllKeywords() {
   };
 }
 
-module.exports = { classifyMessage, loadCustomKeywords, getAllKeywords };
+module.exports = { classifyMessage, loadCustomKeywords, getAllKeywords, isSpam };

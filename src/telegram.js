@@ -301,6 +301,13 @@ async function replyWithClaude(chatId, query, replyToMessageId) {
   }
 
   try {
+    // React to the user's message to acknowledge it
+    tgRequest("setMessageReaction", {
+      chat_id:    chatId,
+      message_id: replyToMessageId,
+      reaction:   [{ type: "emoji", emoji: "👀" }],
+    }).catch(() => {});
+
     // Show typing indicator while Claude thinks
     await tgRequest("sendChatAction", { chat_id: chatId, action: "typing" });
 

@@ -7,7 +7,7 @@ const path  = require("path");
 const cron  = require("node-cron");
 
 const { analyzeSentiment }                                             = require("./sentiment");
-const { classifyMessage, loadCustomKeywords, isSpam }                  = require("./classifier");
+const { classifyMessageAI, loadCustomKeywords, isSpam }                = require("./classifier");
 const { initDB, insertSentiment, deleteByMessageId, getDashboardData } = require("./database");
 const { sendDailyReport, sendWeeklyDigest, buildWeeklyDigestTelegram } = require("./reporter");
 const { startTelegramBot, sendTelegramDailyReport, sendTelegramMessage } = require("./telegram");
@@ -148,7 +148,7 @@ client.on("messageCreate", async (message) => {
   }
 
   const { score, label } = analyzeSentiment(stripped);
-  const category         = classifyMessage(stripped);
+  const category         = await classifyMessageAI(stripped);
   const community        = COMMUNITY_MAP[message.guild?.id] || "discord_main";
 
   const payload = {

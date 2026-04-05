@@ -7,7 +7,7 @@ const {
 } = require("./database");
 const { buildTelegramReport, buildWeeklyDigestTelegram } = require("./reporter");
 const { analyzeSentiment } = require("./sentiment");
-const { classifyMessage, isSpam } = require("./classifier");
+const { classifyMessageAI, isSpam } = require("./classifier");
 
 const TG_TOKEN          = process.env.TELEGRAM_TOKEN;
 const TG_REPORT_CHAT_ID = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
@@ -402,7 +402,7 @@ async function trackTelegramMessage(msg) {
     : (msg.chat?.title || community);
 
   const { score, label } = analyzeSentiment(stripped);
-  const category         = classifyMessage(stripped);
+  const category         = await classifyMessageAI(stripped);
 
   const payload = {
     message_id:   String(msg.message_id),

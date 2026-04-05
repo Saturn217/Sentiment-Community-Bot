@@ -1,3 +1,11 @@
+const Anthropic = require("@anthropic-ai/sdk");
+
+let _anthropic = null;
+function getClient() {
+  if (!_anthropic) _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return _anthropic;
+}
+
 const ISSUE_KEYWORDS = [
   "bug", "error", "broken", "not working", "doesnt work", "doesn't work",
   "cant login", "can't login", "unable to", "failed", "crash", "crashes",
@@ -73,6 +81,34 @@ function classifyMessage(text) {
   return "general";
 }
 
+/**
+ * Hybrid classifier: keyword check first (free), then Claude Haiku for "general" messages.
+ * Falls back to "general" silently on any API error or rate limit.
+ */
+async function classifyMessageAI(text) {
+  const keywordResult = classifyMessage(text);
+  if (keywordResult !== "general") return keywordResult;
+
+  try {
+    const response = await getClient().messages.create({
+      model:      "claude-haiku-4-5-20251001",
+      max_tokens: 10,
+      system:
+        "Classify this community message as exactly one word: " +
+        "'issue' (complaint, bug, problem, error, confusion, frustration, something not working), " +
+        "'feedback' (suggestion, feature request, praise, improvement idea, opinion on UX), " +
+        "or 'general' (casual chat, greetings, questions, news, price talk). " +
+        "Reply with only that single word, nothing else.",
+      messages: [{ role: "user", content: text.slice(0, 500) }],
+    });
+    const result = response.content[0].text.trim().toLowerCase();
+    if (["issue", "feedback", "general"].includes(result)) return result;
+    return "general";
+  } catch {
+    return "general";
+  }
+}
+
 function getAllKeywords() {
   return {
     issue:    { base: ISSUE_KEYWORDS,    custom: customIssueKeywords    },
@@ -80,4 +116,4 @@ function getAllKeywords() {
   };
 }
 
-module.exports = { classifyMessage, loadCustomKeywords, getAllKeywords, isSpam };
+module.exports = { classifyMessage, classifyMessageAI, loadCustomKeywords, getAllKeywords, isSpam };

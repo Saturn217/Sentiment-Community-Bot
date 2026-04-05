@@ -27,6 +27,12 @@ const commands = [
       });
       const overall     = totalMsgs > 0 ? weightedScore / totalMsgs : 0;
       const overallWord = overall > 0.3 ? "🔥 Very happy" : overall > 0.1 ? "😄 Happy" : overall > 0.02 ? "🙂 Mostly positive" : overall > -0.02 ? "😐 Mixed / neutral" : overall > -0.1 ? "😕 A bit negative" : overall > -0.3 ? "😠 Unhappy" : "🚨 Very unhappy";
+      const trendText   = trend.slice(-7).map(({ date, avg_score, message_count }) => {
+        const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
+        const short = new Date(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        const words = avg_score > 0.3 ? "Very happy" : avg_score > 0.1 ? "Happy" : avg_score > 0.02 ? "Mostly positive" : avg_score > -0.02 ? "Mixed" : avg_score > -0.1 ? "A bit negative" : avg_score > -0.3 ? "Unhappy" : "Very unhappy";
+        return `${arrow} **${short}** — ${words} · ${message_count} msgs`;
+      }).join("\n") || "Not enough data yet.";
       return interaction.editReply({ embeds: [
         new EmbedBuilder()
           .setTitle(`📊 Sentiment — Last ${days} Day${days > 1 ? "s" : ""}`)

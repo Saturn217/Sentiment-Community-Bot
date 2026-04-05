@@ -1,7 +1,9 @@
 const https = require("https");
+const Anthropic = require("@anthropic-ai/sdk");
 const {
   getSummary, getTrend, getChannelBreakdown, getRecentIssues, getRecentFeedback,
   getCommunityBreakdown, insertSentiment, deleteByMessageId, cleanOldRecords,
+  getCategorySummary,
 } = require("./database");
 const { buildTelegramReport, buildWeeklyDigestTelegram } = require("./reporter");
 const { analyzeSentiment } = require("./sentiment");
@@ -22,6 +24,312 @@ const CHAT_COMMUNITY_MAP = {
 };
 
 let offset = 0;
+
+// ─── Claude Agent Setup ───────────────────────────────────────────────────────
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ─── Docs Cache ───────────────────────────────────────────────────────────────
+// Set AGENT_DOCS_URL in your .env to any public URL (docs site, Notion, GitHub
+// README, etc). It gets fetched once at startup and injected into every prompt.
+let cachedDocs = "";
+
+async function fetchAndCacheDocs() {
+  const docsUrl = process.env.AGENT_DOCS_URL;
+  if (!docsUrl) return;
+
+  try {
+    console.log(`📖 Fetching docs from ${docsUrl}...`);
+    const content = await fetchUrl(docsUrl, 3);
+
+    // Strip HTML tags — keep readable plain text only
+    cachedDocs = content
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ")
+      .replace(/\s{3,}/g, "\n\n")
+      .trim()
+      .slice(0, 8000); // cap at 8000 chars to stay within Claude's token limit
+
+    console.log(`✅ Docs cached (${cachedDocs.length} chars)`);
+  } catch (err) {
+    console.warn("⚠️  Could not fetch docs:", err.message);
+  }
+}
+
+// Simple HTTP/HTTPS GET with redirect following
+function fetchUrl(url, redirectsLeft = 3) {
+  return new Promise((resolve, reject) => {
+    if (redirectsLeft <= 0) return reject(new Error("Too many redirects"));
+    const lib = url.startsWith("https") ? require("https") : require("http");
+    lib.get(url, (res) => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+        return resolve(fetchUrl(res.headers.location, redirectsLeft - 1));
+      }
+      let raw = "";
+      res.on("data", chunk => raw += chunk);
+      res.on("end", () => resolve(raw));
+    }).on("error", reject);
+  });
+}
+
+// Bot's own username — fetched from Telegram on startup, used to detect @mentions
+let BOT_USERNAME = "";
+
+// Per-chat conversation history — Map<chatId, [{role, content}]>
+// Kept in memory; clears on restart. Upgrade to DB/Redis for persistence.
+const conversationHistory = new Map();
+const MAX_HISTORY_TURNS   = 10; // keep last 10 user/assistant pairs
+
+function getHistory(chatId) {
+  if (!conversationHistory.has(chatId)) conversationHistory.set(chatId, []);
+  return conversationHistory.get(chatId);
+}
+
+function pushHistory(chatId, role, content) {
+  const history = getHistory(chatId);
+  history.push({ role, content });
+  // Trim to MAX_HISTORY_TURNS pairs (each pair = 2 entries)
+  if (history.length > MAX_HISTORY_TURNS * 2) {
+    history.splice(0, history.length - MAX_HISTORY_TURNS * 2);
+  }
+}
+
+/**
+ * Fetch live community data from the DB and format it as a readable
+ * context block that gets injected into Claude's system prompt.
+ * This is what makes Claude aware of real-time sentiment, issues and feedback.
+ */
+async function buildLiveContext() {
+  try {
+    const [
+      summary,
+      communities,
+      recentIssues,
+      recentFeedback,
+      trend,
+      channels,
+    ] = await Promise.all([
+      getSummary(7),
+      getCommunityBreakdown(7),
+      getRecentIssues(7, 10),
+      getRecentFeedback(7, 10),
+      getTrend(7),
+      getChannelBreakdown(1),
+    ]);
+
+    const today = new Date().toLocaleDateString("en-US", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
+    });
+
+    // ── Overall sentiment last 7 days ──────────────────────────────────────
+    let totalMsgs = 0, weightedScore = 0;
+    const labelCounts = {};
+    summary.forEach(({ label, count, avg_score }) => {
+      totalMsgs += count;
+      weightedScore += avg_score * count;
+      labelCounts[label] = count;
+    });
+    const overallScore = totalMsgs > 0 ? weightedScore / totalMsgs : 0;
+    const overallMood  = overallScore > 0.3  ? "Very happy"
+                       : overallScore > 0.1  ? "Happy"
+                       : overallScore > 0.02 ? "Mostly positive"
+                       : overallScore > -0.02 ? "Mixed / neutral"
+                       : overallScore > -0.1  ? "A bit negative"
+                       : overallScore > -0.3  ? "Unhappy"
+                       : "Very unhappy";
+
+    let ctx = `Today is ${today}.\n\n`;
+    ctx += `## LIVE COMMUNITY SENTIMENT DATA (last 7 days)\n\n`;
+    ctx += `**Overall mood:** ${overallMood} (score: ${overallScore.toFixed(3)})\n`;
+    ctx += `**Total messages tracked:** ${totalMsgs}\n`;
+    ctx += `**Positive:** ${labelCounts.positive || 0} | **Neutral:** ${labelCounts.neutral || 0} | **Negative:** ${labelCounts.negative || 0}\n\n`;
+
+    // ── Per-community breakdown ────────────────────────────────────────────
+    if (communities.length) {
+      ctx += `## Community Breakdown\n`;
+      communities.forEach(({ community, platform, message_count, avg_score, positive_count, negative_count, neutral_count }) => {
+        const mood = avg_score > 0.05 ? "positive" : avg_score < -0.05 ? "negative" : "neutral";
+        ctx += `- **${community}** (${platform}): ${message_count} msgs, mood: ${mood} (${avg_score.toFixed(3)}), 😊${positive_count} 😐${neutral_count} 😠${negative_count}\n`;
+      });
+      ctx += "\n";
+    }
+
+    // ── 7-day trend ───────────────────────────────────────────────────────
+    if (trend.length) {
+      ctx += `## Day-by-Day Trend (last 7 days)\n`;
+      trend.forEach(({ date, avg_score, message_count }) => {
+        const d     = new Date(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        const arrow = avg_score > 0.05 ? "↑" : avg_score < -0.05 ? "↓" : "→";
+        ctx += `- ${d}: ${arrow} score ${avg_score.toFixed(3)}, ${message_count} messages\n`;
+      });
+      ctx += "\n";
+    }
+
+    // ── Active channels today ─────────────────────────────────────────────
+    if (channels.length) {
+      ctx += `## Most Active Channels Today\n`;
+      channels.forEach(({ community, channel_name, platform, avg_score, message_count }) => {
+        const mood = avg_score > 0.05 ? "positive" : avg_score < -0.05 ? "negative" : "neutral";
+        ctx += `- ${community}/#${channel_name} (${platform}): ${message_count} msgs, ${mood}\n`;
+      });
+      ctx += "\n";
+    }
+
+    // ── Recent issues ─────────────────────────────────────────────────────
+    if (recentIssues.length) {
+      ctx += `## Recent Issues Reported (last 7 days) — ${recentIssues.length} total\n`;
+      recentIssues.forEach(({ username, community, platform, message_text, timestamp }) => {
+        const when = new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        ctx += `- [${when}] **${username}** (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
+      });
+      ctx += "\n";
+    } else {
+      ctx += `## Recent Issues\nNo issues reported in the last 7 days.\n\n`;
+    }
+
+    // ── Recent feedback ───────────────────────────────────────────────────
+    if (recentFeedback.length) {
+      ctx += `## Recent Feedback (last 7 days) — ${recentFeedback.length} total\n`;
+      recentFeedback.forEach(({ username, community, platform, message_text, timestamp }) => {
+        const when = new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        ctx += `- [${when}] **${username}** (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
+      });
+      ctx += "\n";
+    } else {
+      ctx += `## Recent Feedback\nNo feedback submitted in the last 7 days.\n\n`;
+    }
+
+    return ctx;
+  } catch (err) {
+    console.error("❌ Failed to build live context:", err.message);
+    // Return a minimal fallback so Claude still responds, just without data
+    return `Today is ${new Date().toDateString()}.\nNote: Live community data could not be loaded right now.\n`;
+  }
+}
+
+/**
+ * Send a question to Claude with live DB context injected into the system prompt.
+ * Maintains per-chat conversation history for follow-up questions.
+ */
+async function askClaude(chatId, userMessage) {
+  const history    = getHistory(chatId);
+  const liveData   = await buildLiveContext();
+  const messages   = [...history, { role: "user", content: userMessage }];
+
+  // Inject docs (if loaded) between the persona instructions and the live data
+  const docsSection = cachedDocs
+    ? `## PRODUCT / COMPANY DOCUMENTATION\n${cachedDocs}\n\n`
+    : "";
+
+  const systemPrompt =
+    (process.env.AGENT_SYSTEM_PROMPT ||
+      "You are a helpful community intelligence assistant for this company, deployed in Telegram. " +
+      "Your job is to answer questions about community sentiment, issues, and feedback across all platforms " +
+      "(Discord and Telegram). Be clear and concise. Use bullet points where helpful. " +
+      "When quoting specific issues or feedback, always mention the username and community they came from. " +
+      "If the data doesn't answer the question, say so honestly."
+    ) + "\n\n" + docsSection + liveData;
+
+  const response = await anthropic.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages,
+  });
+
+  const reply = response.content[0].text;
+
+  // Save this turn so follow-up questions have context
+  pushHistory(chatId, "user", userMessage);
+  pushHistory(chatId, "assistant", reply);
+
+  return reply;
+}
+
+/**
+ * Strip the bot @mention from a message text so only the actual question remains.
+ * e.g. "@MySentimentBot what is our refund policy?" → "what is our refund policy?"
+ */
+function stripMention(text) {
+  if (!BOT_USERNAME) return text.trim();
+  return text.replace(new RegExp(`@${BOT_USERNAME}\\s*`, "gi"), "").trim();
+}
+
+/**
+ * Check whether the bot is @mentioned in a message.
+ * Checks both the raw text and the entities array from Telegram.
+ */
+function isBotMentioned(msg) {
+  if (!BOT_USERNAME) return false;
+  const text     = msg.text || "";
+  const entities = msg.entities || [];
+
+  // Check entities (most reliable)
+  const mentionedViaEntity = entities.some(
+    e => e.type === "mention" &&
+      text.substring(e.offset, e.offset + e.length).toLowerCase() ===
+      `@${BOT_USERNAME.toLowerCase()}`
+  );
+  if (mentionedViaEntity) return true;
+
+  // Fallback: plain text check
+  return text.toLowerCase().includes(`@${BOT_USERNAME.toLowerCase()}`);
+}
+
+/**
+ * Check if this message is a direct reply to one of the bot's own messages.
+ */
+function isReplyToBot(msg) {
+  if (!BOT_USERNAME) return false;
+  return msg.reply_to_message?.from?.username?.toLowerCase() ===
+    BOT_USERNAME.toLowerCase();
+}
+
+/**
+ * Send a "typing…" action then reply with Claude's answer.
+ * Replies to the specific message so it's clear who the bot is responding to.
+ */
+async function replyWithClaude(chatId, query, replyToMessageId) {
+  if (!query) {
+    await tgRequest("sendMessage", {
+      chat_id: chatId,
+      text: "👋 Hi! Ask me anything.",
+      reply_to_message_id: replyToMessageId,
+    });
+    return;
+  }
+
+  try {
+    // Show typing indicator while Claude thinks
+    await tgRequest("sendChatAction", { chat_id: chatId, action: "typing" });
+
+    const answer = await askClaude(String(chatId), query);
+
+    // Try Markdown first, fall back to plain text if it fails
+    try {
+      await tgRequest("sendMessage", {
+        chat_id:             chatId,
+        text:                answer,
+        parse_mode:          "Markdown",
+        reply_to_message_id: replyToMessageId,
+      });
+    } catch {
+      await tgRequest("sendMessage", {
+        chat_id:             chatId,
+        text:                answer.replace(/[*`_[\]()~>#+=|{}.!-]/g, "\\$&"),
+        reply_to_message_id: replyToMessageId,
+      });
+    }
+  } catch (err) {
+    console.error("❌ Claude agent error:", err.message);
+    await tgRequest("sendMessage", {
+      chat_id:             chatId,
+      text:                "⚠️ Sorry, I ran into an error. Please try again.",
+      reply_to_message_id: replyToMessageId,
+    });
+  }
+}
 
 // ─── HTTP Helper ──────────────────────────────────────────────────────────────
 function tgRequest(method, body) {
@@ -78,12 +386,10 @@ async function trackTelegramMessage(msg) {
   const msgKey    = `${chatId}:${msg.message_id}`;
 
   // Detect topic/sub-group name
-  // Messages in a topic have message_thread_id and forum_topic_created or reply_to_message
-  const topicName = msg.reply_to_message?.forum_topic_created?.name  // topic messages reference the topic creation
-                 || msg.forum_topic_created?.name                      // the topic creation message itself
+  const topicName = msg.reply_to_message?.forum_topic_created?.name
+                 || msg.forum_topic_created?.name
                  || null;
 
-  // Use topic name as channel if available, otherwise fall back to group title
   const channelName = topicName
     ? `${msg.chat?.title || community} › ${topicName}`
     : (msg.chat?.title || community);
@@ -122,7 +428,23 @@ async function handleCommand(msg) {
   const text   = (msg.text || "").toLowerCase();
 
   try {
-    if (text.startsWith("/report")) {
+
+    // ── NEW: /ask — explicit agent command ───────────────────────────────────
+    if (text.startsWith("/ask")) {
+      const query = msg.text.slice(4).trim(); // preserve original casing
+      if (!query) {
+        return sendMessage(chatId,
+          `💡 Usage: \`/ask <your question>\`\n\nYou can also just tag me: \`@${BOT_USERNAME} your question\``
+        );
+      }
+      return replyWithClaude(chatId, query, msg.message_id);
+
+    // ── NEW: /clearchat — reset conversation memory ──────────────────────────
+    } else if (text.startsWith("/clearchat")) {
+      conversationHistory.delete(String(chatId));
+      return sendMessage(chatId, "🧹 Conversation history cleared! Starting fresh.");
+
+    } else if (text.startsWith("/report")) {
       await sendMessage(chatId, "⏳ Generating combined report...");
       await sendMessage(chatId, await buildTelegramReport());
 
@@ -135,7 +457,6 @@ async function handleCommand(msg) {
             await sendMessage(chatId, parts[i]);
           } catch (partErr) {
             console.error(`❌ Weekly digest part ${i + 1} failed:`, partErr.message);
-            // Send plain text fallback if Markdown fails
             await tgRequest("sendMessage", {
               chat_id: chatId,
               text: parts[i].replace(/[*_`[\]()~>#+=|{}.!\\-]/g, ""),
@@ -153,16 +474,10 @@ async function handleCommand(msg) {
       const trend   = await getTrend(days);
       if (!summary.length) return sendMessage(chatId, "📭 No sentiment data yet.");
 
-      let totalMsgs = 0, weightedScore = 0, summaryText = "";
-      summary.forEach(({ label, count, avg_score }) => {
-        const emoji = label === "positive" ? "🟢" : label === "negative" ? "🔴" : "🟡";
-        const pct   = 0; // calculated after
-        summaryText += `${emoji} *${label}*: ${count} msgs\n`;
-        totalMsgs += count; weightedScore += avg_score * count;
-      });
+      let totalMsgs = 0, weightedScore = 0;
+      summary.forEach(({ count, avg_score }) => { totalMsgs += count; weightedScore += avg_score * count; });
 
-      // Add percentages now that we have totalMsgs
-      summaryText = "";
+      let summaryText = "";
       summary.forEach(({ label, count }) => {
         const emoji = label === "positive" ? "🟢" : label === "negative" ? "🔴" : "🟡";
         const pct   = totalMsgs > 0 ? Math.round((count / totalMsgs) * 100) : 0;
@@ -313,7 +628,6 @@ async function handleCommand(msg) {
     } else if (text.startsWith("/tgdelete")) {
       const messageId = text.split(" ")[1]?.trim();
       if (!messageId) return sendMessage(chatId, "⚠️ Usage: `/tgdelete <message_id>`");
-      // Cancel if still pending
       const msgKey = `${chatId}:${messageId}`;
       if (pendingTgMsgs.has(msgKey)) {
         clearTimeout(pendingTgMsgs.get(msgKey));
@@ -325,7 +639,6 @@ async function handleCommand(msg) {
       await sendMessage(chatId, `✅ Removed:\nID: \`${messageId}\`\nCategory: *${removed.category}*\nTracked at: \`${new Date(removed.timestamp).toLocaleString()}\``);
 
     } else if (text.startsWith("/tgfind")) {
-      // Usage: /tgfind <username>
       const username = text.split(" ").slice(1).join(" ").trim();
       if (!username) return sendMessage(chatId, "⚠️ Usage: `/tgfind <username>`");
 
@@ -357,7 +670,6 @@ async function handleCommand(msg) {
       await sendMessage(chatId, `🧹 *Database Cleanup*\n\n*Before:*\n${beforeText}\n\n🗑️ Deleted *${deleted}* unverifiable records.`);
 
     } else if (text.startsWith("/tgtrack")) {
-      // Usage: /tgtrack issue|feedback <message text>
       const parts    = text.split(" ");
       const category = parts[1]?.toLowerCase();
       const msgText  = parts.slice(2).join(" ").trim();
@@ -393,25 +705,29 @@ async function handleCommand(msg) {
 
     } else if (text.startsWith("/start") || text.startsWith("/help")) {
       await sendMessage(chatId,
-        `👋 *Sentiment Bot*\n\nTracking sentiment across all your communities.\n\n` +
-        `*Report Commands:*\n` +
+        `👋 *Sentiment Bot + AI Agent*\n\n` +
+        `I track community sentiment AND answer questions via Claude AI\\.\n\n` +
+        `*🤖 Agent — Ask Me Anything:*\n` +
+        `Tag me in a group: \`@${BOT_USERNAME} your question\`\n` +
+        `/ask \\[question\\] — Ask me directly\n` +
+        `/clearchat — Reset our conversation memory\n\n` +
+        `*📊 Report Commands:*\n` +
         `/report — Daily report\n` +
         `/weeklyreport — Weekly digest\n` +
-        `/pausereport \\[daily|weekly|both\\] \\[days\\] — Pause reports \\(admin\\)\n` +
-        `/resumereport \\[daily|weekly|both\\] — Resume reports \\(admin\\)\n` +
-        `/reportstatus — Check if reports are paused \\(admin\\)\n\n` +
-        `*Analytics Commands:*\n` +
+        `/pausereport \\[daily|weekly|both\\] \\[days\\]\n` +
+        `/resumereport \\[daily|weekly|both\\]\n` +
+        `/reportstatus — Check report pause status\n\n` +
+        `*📈 Analytics Commands:*\n` +
         `/sentiment \\[days\\] — Sentiment summary\n` +
         `/channels \\[days\\] — Per\\-channel breakdown\n` +
         `/issues \\[days\\] — Recent issues\n` +
         `/feedback \\[days\\] — Recent feedback\n` +
         `/communities — All communities overview\n\n` +
-        `*Admin Commands:*\n` +
-        `/tgtrack \\[issue|feedback\\] \\[text\\] — Manually track a message\n` +
-        `/tgdelete \\[id\\] — Remove by message ID\n` +
-        `/tgdeleteuser \\[username\\] \\[days\\] — Remove all records from a user\n` +
-        `/tgclean — Clean unverifiable records\n` +
-        `/help — Show this message`
+        `*🔧 Admin Commands:*\n` +
+        `/tgtrack \\[issue|feedback\\] \\[text\\]\n` +
+        `/tgdelete \\[id\\]\n` +
+        `/tgdeleteuser \\[username\\] \\[days\\]\n` +
+        `/tgclean — Clean unverifiable records`
       );
     }
   } catch (err) {
@@ -431,14 +747,34 @@ async function poll() {
         const msg = update.message;
         if (!msg) continue;
 
+        const msgChatId  = String(msg.chat?.id);
+        const isPrivate  = msg.chat?.type === "private";
+        const isMonitored = msgChatId === String(TG_MONITOR_1) || msgChatId === String(TG_MONITOR_2);
+
+        // ── Slash commands — always handled ──────────────────────────────────
         if (msg.text?.startsWith("/")) {
           await handleCommand(msg);
-        } else {
-          // Only track from monitored groups — NEVER from report chat
-          const msgChatId   = String(msg.chat?.id);
-          const isMonitored = msgChatId === String(TG_MONITOR_1) || msgChatId === String(TG_MONITOR_2);
-          if (isMonitored) await trackTelegramMessage(msg);
+          continue;
         }
+
+        // ── Agent: DMs — respond to everything ───────────────────────────────
+        if (isPrivate) {
+          const query = (msg.text || "").trim();
+          await replyWithClaude(msgChatId, query, msg.message_id);
+          continue;
+        }
+
+        // ── Agent: Groups — respond only when mentioned or replied to ────────
+        if (isBotMentioned(msg) || isReplyToBot(msg)) {
+          const query = stripMention(msg.text || "").trim();
+          await replyWithClaude(msgChatId, query, msg.message_id);
+          // Still track sentiment for the message (don't skip)
+          if (isMonitored) await trackTelegramMessage(msg);
+          continue;
+        }
+
+        // ── Sentiment tracking (unchanged existing behaviour) ─────────────────
+        if (isMonitored) await trackTelegramMessage(msg);
       }
     }
   } catch (err) {
@@ -461,12 +797,33 @@ async function sendTelegramDailyReport() {
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-function startTelegramBot() {
+async function startTelegramBot() {
   if (!TG_TOKEN) { console.warn("⚠️  TELEGRAM_TOKEN not set — Telegram bot disabled."); return; }
-  console.log("🤖 Telegram bot started");
+
+  // Fetch the bot's own username so we can detect @mentions
+  try {
+    const me = await tgRequest("getMe", {});
+    if (me.ok) {
+      BOT_USERNAME = me.result.username;
+      console.log(`🤖 Telegram bot started as @${BOT_USERNAME}`);
+    }
+  } catch (err) {
+    console.warn("⚠️  Could not fetch bot username:", err.message);
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.warn("⚠️  ANTHROPIC_API_KEY not set — agent replies will fail.");
+  } else {
+    console.log("🧠 Claude agent ready");
+  }
+
   if (TG_MONITOR_1)      console.log(`   📊 Monitoring: ${COMMUNITY_1} (${TG_MONITOR_1})`);
   if (TG_MONITOR_2)      console.log(`   📊 Monitoring: ${COMMUNITY_2} (${TG_MONITOR_2})`);
   if (TG_REPORT_CHAT_ID) console.log(`   📬 Reports to: ${TG_REPORT_CHAT_ID}`);
+
+  // Fetch and cache docs on startup (non-blocking)
+  fetchAndCacheDocs();
+
   poll();
 }
 

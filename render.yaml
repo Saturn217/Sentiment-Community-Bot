@@ -3,7 +3,7 @@ services:
     name: sentiment-bot
     runtime: node
     buildCommand: npm install
-    startCommand: npm start
+    startCommand: node src/bot.js
     envVars:
       - key: NODE_ENV
         value: production

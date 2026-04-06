@@ -87,6 +87,15 @@ async function deleteByUsername(username, days = 1) {
   return rows;
 }
 
+async function deleteAllByUser(username, userId) {
+  // Deletes every record for a user regardless of category or age — used on ban
+  const { rowCount } = await pool.query(
+    `DELETE FROM sentiment WHERE username = $1 OR user_id = $2`,
+    [username, String(userId)]
+  );
+  return rowCount;
+}
+
 async function cleanOldRecords() {
   const { rows: before } = await pool.query(`
     SELECT category, COUNT(*)::int AS total,
@@ -274,7 +283,7 @@ async function getDashboardData() {
 }
 
 module.exports = {
-  initDB, insertSentiment, deleteByMessageId, deleteByUsername, cleanOldRecords,
+  initDB, insertSentiment, deleteByMessageId, deleteByUsername, deleteAllByUser, cleanOldRecords,
   getSummary, getTrend, getChannelBreakdown, getTopUsers, getTodayCount,
   getCommunityBreakdown, getCategorySummary, getRecentIssues, getRecentFeedback, getCategoryTrend,
   getCustomKeywords, addCustomKeyword, removeCustomKeyword,

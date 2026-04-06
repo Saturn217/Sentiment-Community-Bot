@@ -3,7 +3,7 @@ const Anthropic = require("@anthropic-ai/sdk");
 const {
   getSummary, getTrend, getChannelBreakdown, getRecentIssues, getRecentFeedback,
   getCommunityBreakdown, insertSentiment, deleteByMessageId, cleanOldRecords,
-  getCategorySummary,
+  getCategorySummary, deleteAllByUser,
 } = require("./database");
 const { buildTelegramReport, buildWeeklyDigestTelegram } = require("./reporter");
 const { analyzeSentiment } = require("./sentiment");
@@ -746,11 +746,25 @@ async function handleCommand(msg) {
 // ─── Long Polling ─────────────────────────────────────────────────────────────
 async function poll() {
   try {
-    const res = await tgRequest("getUpdates", { offset, timeout: 25, allowed_updates: ["message"] });
+    const res = await tgRequest("getUpdates", { offset, timeout: 25, allowed_updates: ["message", "chat_member"] });
 
     if (res.ok && res.result.length > 0) {
       for (const update of res.result) {
         offset = update.update_id + 1;
+
+        // ── Auto-purge on ban ─────────────────────────────────────────────────
+        if (update.chat_member) {
+          const { new_chat_member } = update.chat_member;
+          if (new_chat_member?.status === "kicked") {
+            const banned = new_chat_member.user;
+            const username = banned.username || banned.first_name || "unknown";
+            const deleted  = await deleteAllByUser(username, banned.id).catch(() => 0);
+            if (deleted > 0)
+              console.log(`🚫 Banned user @${username} — purged ${deleted} tracked record(s) from DB`);
+          }
+          continue;
+        }
+
         const msg = update.message;
         if (!msg) continue;
 

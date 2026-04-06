@@ -8,7 +8,7 @@ const cron  = require("node-cron");
 
 const { analyzeSentiment }                                             = require("./sentiment");
 const { classifyMessageAI, loadCustomKeywords, isSpam }                = require("./classifier");
-const { initDB, insertSentiment, deleteByMessageId, getDashboardData } = require("./database");
+const { initDB, insertSentiment, deleteByMessageId, deleteAllByUser, getDashboardData } = require("./database");
 const { sendDailyReport, sendWeeklyDigest, buildWeeklyDigestTelegram } = require("./reporter");
 const { startTelegramBot, sendTelegramDailyReport, sendTelegramMessage } = require("./telegram");
 const { reportState, isReportPaused, consumeSkip }                    = require("./reportState");
@@ -44,6 +44,8 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMessageReactions,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildBans,
   ],
 });
 
@@ -198,6 +200,36 @@ client.on("messageDeleteBulk", async (messages) => {
     }
   }
   console.log(`🗑️  Bulk delete handled: ${messages.size} messages`);
+});
+
+// ─── Purge on Ban ─────────────────────────────────────────────────────────────
+client.on("guildBanAdd", async (ban) => {
+  try {
+    const deleted = await deleteAllByUser(ban.user.username, ban.user.id);
+    if (deleted > 0)
+      console.log(`🚫 Banned @${ban.user.username} — purged ${deleted} record(s) from DB`);
+  } catch (err) {
+    console.error("❌ Failed to purge banned user:", err.message);
+  }
+});
+
+// ─── Purge on Kick ────────────────────────────────────────────────────────────
+client.on("guildMemberRemove", async (member) => {
+  try {
+    // Fetch audit log to distinguish kicks from voluntary leaves
+    const logs = await member.guild.fetchAuditLogs({ type: 20, limit: 5 }).catch(() => null);
+    if (!logs) return;
+    const entry = logs.entries.find(e =>
+      e.target?.id === member.id &&
+      Date.now() - e.createdTimestamp < 5000
+    );
+    if (!entry) return; // voluntary leave — do nothing
+    const deleted = await deleteAllByUser(member.user.username, member.user.id);
+    if (deleted > 0)
+      console.log(`👢 Kicked @${member.user.username} — purged ${deleted} record(s) from DB`);
+  } catch (err) {
+    console.error("❌ Failed to purge kicked user:", err.message);
+  }
 });
 
 // ─── Slash Commands ───────────────────────────────────────────────────────────

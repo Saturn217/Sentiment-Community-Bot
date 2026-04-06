@@ -183,51 +183,96 @@ async function buildTelegramReport() {
     totalScore += avg_score * c;
   });
   const overallScore  = count > 0 ? totalScore / count : 0;
-  const { emoji: moodEmoji, label: moodLabel } = getMood(overallScore);
+  const { emoji: moodEmoji } = getMood(overallScore);
   const issueCount    = categorySummary?.find(c => c.category === "issue")?.count    || 0;
   const feedbackCount = categorySummary?.find(c => c.category === "feedback")?.count || 0;
-
   const communitySummary = buildCommunitySummary(positive, negative, neutral, count, issueCount, feedbackCount);
 
+  // Escape * and _ in user content to prevent broken Markdown
+  const esc = str => (str || "").replace(/([*_`[])/g, "\\$1");
+
+  // Breakdown bars
+  const pct    = n  => count > 0 ? Math.round((n / count) * 100) : 0;
+  const miniBar = (n, emoji) => {
+    const p = pct(n); const f = Math.round(p / 10);
+    return `${emoji} ${"█".repeat(f)}${"░".repeat(10 - f)} *${p}%* _(${n} msgs)_`;
+  };
   const breakdownText = count > 0
-    ? `${buildBar(positive, count, "🟢", 10)}\n${buildBar(neutral, count, "🟡", 10)}\n${buildBar(negative, count, "🔴", 10)}`
-    : "No messages tracked today.";
+    ? `${miniBar(positive, "🟢")}\n${miniBar(neutral, "🟡")}\n${miniBar(negative, "🔴")}`
+    : "_No messages tracked today._";
 
-  let trendText = "";
-  trend.slice(-5).forEach(({ date, avg_score, message_count }) => {
+  // 7-day trend (last 5 days)
+  const trendLines = trend.slice(-5).map(({ date, avg_score, message_count }) => {
     const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
-    const words = scoreToWords(avg_score);
-    const short = formatDate(date);
-    trendText += `${arrow} *${short}* — ${words} · ${message_count} msgs\n`;
-  });
+    return `${arrow} *${formatDate(date)}* — ${scoreToWords(avg_score)} · ${message_count} msgs`;
+  }).join("\n") || "_Not enough data yet._";
 
-  const communityText = communities.length > 0
+  // Communities
+  const communityLines = communities.length > 0
     ? communities.map(({ community, platform, message_count, avg_score }) => {
-        const plat  = platform === "telegram" ? "📱" : "💬";
-        const mood  = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        const words = scoreToWords(avg_score);
-        return `${mood}${plat} *${community}* — ${words} · ${message_count} msgs`;
-      }).join("\n")
-    : "No community data yet.";
+        const plat = platform === "telegram" ? "📱" : "💬";
+        const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+        return `${mood}${plat} *${esc(community)}*\n     ${scoreToWords(avg_score)} · ${message_count} msgs`;
+      }).join("\n\n")
+    : "_No community data yet._";
 
-  // Escape special chars in user content for Telegram Markdown
-  const tgEsc = str => (str || "").replace(/[_*[\]()~`>#+=|{}.!-]/g, "\\$&");
+  // Issues
+  const issueLines = recentIssues.length > 0
+    ? recentIssues.map(({ username, community, message_text }) => {
+        const preview = esc((message_text || "").slice(0, 150));
+        const tail    = (message_text || "").length > 150 ? "..." : "";
+        return `🔴 *${esc(username)}* · _${esc(community)}_\n_"${preview}${tail}"_`;
+      }).join("\n\n")
+    : "✅ _No issues reported today_";
 
-  const issuesText = recentIssues.length > 0
-    ? recentIssues.map(({ username, community, message_text }) =>
-        `🔴 *${tgEsc(username)}* \\[${tgEsc(community)}\\]: ${tgEsc(message_text?.slice(0, 150))}${message_text?.length > 150 ? "..." : ""}`
-      ).join("\n")
-    : "✅ No issues reported today!";
-
-  const feedbackText = recentFeedback.length > 0
-    ? recentFeedback.map(({ username, community, message_text }) =>
-        `💬 *${tgEsc(username)}* \\[${tgEsc(community)}\\]: ${tgEsc(message_text?.slice(0, 150))}${message_text?.length > 150 ? "..." : ""}`
-      ).join("\n")
-    : "📭 No feedback submitted today.";
+  // Feedback
+  const feedbackLines = recentFeedback.length > 0
+    ? recentFeedback.map(({ username, community, message_text }) => {
+        const preview = esc((message_text || "").slice(0, 150));
+        const tail    = (message_text || "").length > 150 ? "..." : "";
+        return `💬 *${esc(username)}* · _${esc(community)}_\n_"${preview}${tail}"_`;
+      }).join("\n\n")
+    : "📭 _No feedback submitted today_";
 
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const D = "━━━━━━━━━━━━━━━━━━━━";
 
-  return `${moodEmoji} *Daily Sentiment Report — ${moodLabel}*\n📅 ${today}\n\n📝 *What's happening:* ${communitySummary}\n📊 *Community mood:* ${scoreToWords(overallScore)} · ${count || 0} messages\n\n🌐 *Communities Today*\n${communityText}\n\n📊 *Sentiment Breakdown*\n\`\`\`\n${breakdownText}\n\`\`\`\n📅 *7\\-Day Trend*\n${trendText || "Not enough data yet."}\n🐛 *Issues Today*\n${issuesText}\n\n💡 *Feedback Today*\n${feedbackText}\n\n_Sentiment Bot • Tracking community vibes daily_`;
+  return [
+    `${moodEmoji} *Daily Sentiment Report*`,
+    `_${today}_`,
+    ``,
+    `_${communitySummary}_`,
+    ``,
+    `*Overall Mood:* ${scoreToWords(overallScore)} · *${count || 0}* messages`,
+    ``,
+    D,
+    `🌐 *Communities Today*`,
+    ``,
+    communityLines,
+    ``,
+    D,
+    `📊 *Sentiment Breakdown*`,
+    ``,
+    breakdownText,
+    ``,
+    D,
+    `📅 *7-Day Trend*`,
+    ``,
+    trendLines,
+    ``,
+    D,
+    `🐛 *Issues Today* _(${issueCount})_`,
+    ``,
+    issueLines,
+    ``,
+    D,
+    `💡 *Feedback Today* _(${feedbackCount})_`,
+    ``,
+    feedbackLines,
+    ``,
+    D,
+    `_Sentiment Bot · Daily Report_`,
+  ].join("\n");
 }
 
 // ─── Weekly Discord Embed ─────────────────────────────────────────────────────
@@ -312,45 +357,93 @@ async function buildWeeklyDigestTelegram() {
   ]);
 
   let totalMsgs = 0, totalScore = 0, totalIssues = 0, totalFeedback = 0;
-  weeklyStats.forEach(({ message_count, avg_score, issue_count, feedback_count }) => {
-    totalMsgs += message_count; totalScore += avg_score * message_count;
-    totalIssues += issue_count; totalFeedback += feedback_count;
+  let totalPositive = 0, totalNegative = 0, totalNeutral = 0;
+  weeklyStats.forEach(({ message_count, avg_score, issue_count, feedback_count, positive_count, negative_count, neutral_count }) => {
+    totalMsgs     += message_count; totalScore    += avg_score * message_count;
+    totalIssues   += issue_count;   totalFeedback += feedback_count;
+    totalPositive += positive_count || 0;
+    totalNegative += negative_count || 0;
+    totalNeutral  += neutral_count  || 0;
   });
   const overallScore = totalMsgs > 0 ? totalScore / totalMsgs : 0;
-  const { emoji: moodEmoji, label: moodLabel } = getMood(overallScore);
+  const { emoji: moodEmoji } = getMood(overallScore);
 
-  const communityText = communities.map(({ community, platform, message_count, avg_score }) => {
-    const plat  = platform === "telegram" ? "📱" : "💬";
-    const mood  = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-    const words = scoreToWords(avg_score);
-    return `${mood}${plat} *${community}* — ${words} · ${message_count} msgs`;
-  }).join("\n") || "No data.";
+  const esc = str => (str || "").replace(/([*_`[])/g, "\\$1");
 
-  // Escape special chars in user-generated content for Telegram Markdown
-  function tgEscape(str) {
-    return (str || "").replace(/[_*[\]()~`>#+=|{}.!-]/g, "\\$&");
-  }
+  // Day-by-day trend
+  const uniqueDays = [...new Set(weeklyStats.map(r => String(r.date)))];
+  const trendLines = uniqueDays.map(date => {
+    const dayRows  = weeklyStats.filter(r => String(r.date) === date);
+    const dayMsgs  = dayRows.reduce((s, r) => s + r.message_count, 0);
+    const dayScore = dayRows.reduce((s, r) => s + r.avg_score * r.message_count, 0) / (dayMsgs || 1);
+    const arrow    = dayScore > 0.05 ? "📈" : dayScore < -0.05 ? "📉" : "➡️";
+    return `${arrow} *${formatDate(date)}* — ${scoreToWords(dayScore)} · ${dayMsgs} msgs`;
+  }).join("\n") || "_No data._";
 
-  const issuesText = issues.slice(0, 3).map(({ username, community, message_text }) =>
-    `🔴 *${tgEscape(username)}* \\[${tgEscape(community)}\\]:\n${tgEscape(message_text?.slice(0, 150))}${message_text?.length > 150 ? "..." : ""}`
-  ).join("\n\n") || "✅ No issues this week!";
+  // Community performance
+  const communityLines = communities.length > 0
+    ? communities.map(({ community, platform, message_count, avg_score }) => {
+        const plat = platform === "telegram" ? "📱" : "💬";
+        const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
+        return `${mood}${plat} *${esc(community)}*\n     ${scoreToWords(avg_score)} · ${message_count} msgs`;
+      }).join("\n\n")
+    : "_No community data._";
 
-  const feedbackText = feedback.slice(0, 3).map(({ username, community, message_text }) =>
-    `💬 *${tgEscape(username)}* \\[${tgEscape(community)}\\]:\n${tgEscape(message_text?.slice(0, 150))}${message_text?.length > 150 ? "..." : ""}`
-  ).join("\n\n") || "📭 No feedback this week.";
+  // Issues
+  const issueLines = issues.slice(0, 3).map(({ username, community, message_text }) => {
+    const preview = esc((message_text || "").slice(0, 150));
+    const tail    = (message_text || "").length > 150 ? "..." : "";
+    return `🔴 *${esc(username)}* · _${esc(community)}_\n_"${preview}${tail}"_`;
+  }).join("\n\n") || "✅ _No issues this week_";
+
+  // Feedback
+  const feedbackLines = feedback.slice(0, 3).map(({ username, community, message_text }) => {
+    const preview = esc((message_text || "").slice(0, 150));
+    const tail    = (message_text || "").length > 150 ? "..." : "";
+    return `💬 *${esc(username)}* · _${esc(community)}_\n_"${preview}${tail}"_`;
+  }).join("\n\n") || "📭 _No feedback this week_";
 
   const end = new Date(); const start = new Date(); start.setDate(start.getDate() - 7);
   const weekRange = `${start.toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+  const D = "━━━━━━━━━━━━━━━━━━━━";
 
-  // Return as array of 2 messages to avoid Telegram 4096 char limit
   return [
-    `📋 *Weekly Digest — ${moodEmoji} ${moodLabel}*\n📅 ${weekRange}\n\n` +
-    `📨 *${totalMsgs}* messages · 🐛 *${totalIssues}* issues · 💡 *${totalFeedback}* feedback\n\n` +
-    `🌐 *Community Performance*\n${communityText}`,
+    // ── Message 1: Overview + Trend + Communities ──
+    [
+      `📋 *Weekly Digest* ${moodEmoji}`,
+      `_${weekRange}_`,
+      ``,
+      `📨 *${totalMsgs}* messages tracked this week`,
+      `😊 *${totalPositive}* positive  😐 *${totalNeutral}* neutral  😠 *${totalNegative}* negative`,
+      `🐛 *${totalIssues}* issues reported  💡 *${totalFeedback}* feedback received`,
+      ``,
+      `*Overall Mood:* ${scoreToWords(overallScore)}`,
+      ``,
+      D,
+      `📅 *Day-by-Day Trend*`,
+      ``,
+      trendLines,
+      ``,
+      D,
+      `🌐 *Community Performance*`,
+      ``,
+      communityLines,
+    ].join("\n"),
 
-    `🐛 *Top Issues This Week*\n${issuesText}\n\n` +
-    `💡 *Top Feedback This Week*\n${feedbackText}\n\n` +
-    `_Sentiment Bot • Weekly Digest_`
+    // ── Message 2: Issues + Feedback ──
+    [
+      `🐛 *Top Issues This Week* _(${issues.length})_`,
+      ``,
+      issueLines,
+      ``,
+      D,
+      `💡 *Top Feedback This Week* _(${feedback.length})_`,
+      ``,
+      feedbackLines,
+      ``,
+      D,
+      `_Sentiment Bot · Weekly Digest_`,
+    ].join("\n"),
   ];
 }
 

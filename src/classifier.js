@@ -42,6 +42,23 @@ const SPAM_PATTERNS = [
   /\b(porn|xxx|adult|nude|sex)\b/i,  // adult content
   /casino|gambling|betting site/i,
   /whatsapp.*group.*join|join.*whatsapp/i,
+
+  // Spaced-out character spam (e.g. "E T H 神 級 預 判" or "不 賺 都 他 媽")
+  /(?:^|[\s\uFEFF])(\S) \1|\b(\S) (\S) (\S) \4/u,  // repeated spaced chars
+  /(\S ){4,}\S/,                     // 5+ single chars each separated by a space
+
+  // Crypto price-prediction & signal spam
+  /神.*級.*預.*判|預.*判.*神|信號.*群|喊單|跟單/u,  // Chinese trading signal spam
+  /\b(eth|btc|sol|bnb)\b.*神|神.*(eth|btc|sol|bnb)\b/iu,
+
+  // Promotional @CamelCase account spam (e.g. @BitTapGloba, @CryptoAlphaBot)
+  /@[A-Z][a-z]{2,}[A-Z][a-zA-Z]+/,
+
+  // Same emoji repeated 2+ times at the very start (🎯🎯, 🟥🟥, 🤬🤬 openers)
+  /^(\p{Emoji_Presentation})\1/u,
+
+  // CJK character blocks combined with profit/trading keywords
+  /[\u4e00-\u9fff]{2,}.{0,20}(赚|躺|稳|绿色|项目|群)/u,
 ];
 
 /** Returns true if the message looks like spam and should be ignored */

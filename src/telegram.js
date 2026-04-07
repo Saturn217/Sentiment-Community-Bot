@@ -3,7 +3,7 @@ const Anthropic = require("@anthropic-ai/sdk");
 const {
   getSummary, getTrend, getChannelBreakdown, getRecentIssues, getRecentFeedback,
   getCommunityBreakdown, insertSentiment, deleteByMessageId, cleanOldRecords,
-  getCategorySummary, deleteAllByUser,
+  getCategorySummary, deleteAllByUser, deleteAllByUsername, findByUsername,
   getConversationHistory, saveConversationTurn, clearConversationHistory,
 } = require("./database");
 const { rescheduleDailyCron } = require("./scheduler");
@@ -671,18 +671,22 @@ async function handleCommand(msg) {
       if (!removed) return sendMessage(chatId, `⚠️ No record found for message ID \`${messageId}\`.`);
       await sendMessage(chatId, `✅ Removed:\nID: \`${messageId}\`\nCategory: *${removed.category}*\nTracked at: \`${new Date(removed.timestamp).toLocaleString()}\``);
 
+    } else if (text.startsWith("/tgpurge")) {
+      const username = text.split(" ").slice(1).join(" ").trim();
+      if (!username) {
+        return sendMessage(chatId,
+          `⚠️ Usage: \`/tgpurge <username>\`\n\nDeletes *all* tracked records for a user (any category, any age). Use after banning someone.`
+        );
+      }
+      const deleted = await deleteAllByUsername(username);
+      if (!deleted) return sendMessage(chatId, `📭 No records found for *${username}*.`);
+      await sendMessage(chatId, `🗑️ Purged *${deleted}* record${deleted !== 1 ? "s" : ""} for *${username}* \\(all categories\\).`);
+
     } else if (text.startsWith("/tgfind")) {
       const username = text.split(" ").slice(1).join(" ").trim();
       if (!username) return sendMessage(chatId, "⚠️ Usage: `/tgfind <username>`");
 
-      const { pool } = require("./database");
-      const { rows } = await pool.query(`
-        SELECT username, category, message_id, message_text, timestamp
-        FROM sentiment
-        WHERE username ILIKE $1
-          AND category IN ('issue','feedback')
-        ORDER BY timestamp DESC LIMIT 10
-      `, [`%${username}%`]);
+      const rows = await findByUsername(username);
 
       if (!rows.length) return sendMessage(chatId, `📭 No records found matching *${username}*`);
 
@@ -690,7 +694,7 @@ async function handleCommand(msg) {
         `👤 *${r.username}* | ${r.category}\n` +
         `🆔 \`${r.message_id || "no-id"}\`\n` +
         `📅 ${new Date(r.timestamp).toLocaleDateString()}\n` +
-        `💬 _${r.message_text?.slice(0, 60)}..._`
+        `💬 _${(r.message_text || "").slice(0, 60)}_`
       ).join("\n\n");
 
       await sendMessage(chatId, `🔍 *Records matching "${username}":*\n\n${result}`);
@@ -760,7 +764,9 @@ async function handleCommand(msg) {
         `*🔧 Admin Commands:*\n` +
         `/tgtrack \\[issue|feedback\\] \\[text\\]\n` +
         `/tgdelete \\[id\\]\n` +
-        `/tgdeleteuser \\[username\\] \\[days\\]\n` +
+        `/tgdeleteuser \\[username\\] \\[days\\] — Delete issue/feedback records\n` +
+        `/tgpurge \\[username\\] — Delete ALL records \\(use after ban\\)\n` +
+        `/tgfind \\[username\\] — Search DB for user\n` +
         `/tgclean — Clean unverifiable records`
       );
     }

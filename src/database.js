@@ -117,6 +117,25 @@ async function deleteAllByUser(username, userId) {
   return rowCount;
 }
 
+async function deleteAllByUsername(username) {
+  // Deletes ALL records matching username (case-insensitive, partial match) — used by /tgpurge
+  const { rowCount } = await pool.query(
+    `DELETE FROM sentiment WHERE username ILIKE $1`,
+    [username]
+  );
+  return rowCount;
+}
+
+async function findByUsername(username) {
+  const { rows } = await pool.query(`
+    SELECT username, category, message_id, message_text, timestamp
+    FROM sentiment
+    WHERE username ILIKE $1
+    ORDER BY timestamp DESC LIMIT 20
+  `, [`%${username}%`]);
+  return rows;
+}
+
 async function cleanOldRecords() {
   const { rows: before } = await pool.query(`
     SELECT category, COUNT(*)::int AS total,
@@ -394,7 +413,7 @@ async function detectIssueSurge() {
 }
 
 module.exports = {
-  initDB, insertSentiment, deleteByMessageId, deleteByUsername, deleteAllByUser, cleanOldRecords,
+  initDB, insertSentiment, deleteByMessageId, deleteByUsername, deleteAllByUser, deleteAllByUsername, findByUsername, cleanOldRecords,
   getSummary, getTrend, getChannelBreakdown, getTopUsers, getTodayCount,
   getCommunityBreakdown, getCategorySummary, getRecentIssues, getRecentFeedback, getCategoryTrend,
   getCustomKeywords, addCustomKeyword, removeCustomKeyword,

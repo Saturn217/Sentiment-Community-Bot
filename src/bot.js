@@ -1,6 +1,6 @@
 if (process.env.NODE_ENV !== "production") require("dotenv").config();
 
-const { Client, GatewayIntentBits, REST, Routes, Collection } = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, Collection, EmbedBuilder } = require("discord.js");
 const http  = require("http");
 const fs    = require("fs");
 const path  = require("path");
@@ -8,7 +8,9 @@ const cron  = require("node-cron");
 
 const { analyzeSentiment }                                             = require("./sentiment");
 const { classifyMessageAI, loadCustomKeywords, isSpam }                = require("./classifier");
-const { initDB, insertSentiment, deleteByMessageId, deleteAllByUser, getDashboardData } = require("./database");
+const { initDB, insertSentiment, deleteByMessageId, deleteAllByUser, getDashboardData,
+        detectSentimentSpike, detectIssueSurge, getSetting, setSetting } = require("./database");
+const { registerReschedule } = require("./scheduler");
 const { sendDailyReport, sendWeeklyDigest, buildWeeklyDigestTelegram } = require("./reporter");
 const { startTelegramBot, sendTelegramDailyReport, sendTelegramMessage } = require("./telegram");
 const { reportState, isReportPaused, consumeSkip }                    = require("./reportState");
@@ -68,11 +70,78 @@ async function registerCommandsForGuild(guildId) {
   }
 }
 
+// ─── Proactive Alerts ─────────────────────────────────────────────────────────
+const lastAlertSent   = new Map();
+const ALERT_COOLDOWN  = 2 * 60 * 60 * 1000; // 2 hours
+
+async function checkAndSendAlerts() {
+  try {
+    const [spike, surge] = await Promise.all([detectSentimentSpike(), detectIssueSurge()]);
+
+    if (spike) {
+      const last = lastAlertSent.get("spike") || 0;
+      if (Date.now() - last > ALERT_COOLDOWN) {
+        lastAlertSent.set("spike", Date.now());
+        const msg =
+          `⚠️ *Sentiment Alert*\n\nNegative sentiment spike detected in the last hour\\!\n\n` +
+          `📉 Last hour avg: *${spike.recent_avg.toFixed(3)}*\n` +
+          `📊 24h baseline: *${spike.baseline_avg.toFixed(3)}*\n` +
+          `📉 Drop: *${spike.delta.toFixed(3)}*\n` +
+          `💬 Messages in last hour: *${spike.recent_count}*`;
+        const reportChat = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+        if (reportChat) await sendTelegramMessage(reportChat, msg).catch(() => {});
+        const channelId = process.env.REPORT_CHANNEL_ID;
+        if (channelId) {
+          const ch = await client.channels.fetch(channelId).catch(() => null);
+          if (ch) await ch.send({ embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️ Sentiment Spike Alert")
+              .setDescription(`Negative sentiment spike detected!\n\n📉 Last hour avg: **${spike.recent_avg.toFixed(3)}**\n📊 24h baseline: **${spike.baseline_avg.toFixed(3)}**\n📉 Drop: **${spike.delta.toFixed(3)}**\n💬 Messages: **${spike.recent_count}**`)
+              .setColor(0xe74c3c).setTimestamp()
+          ]}).catch(() => {});
+        }
+        console.log("🚨 Sent sentiment spike alert");
+      }
+    }
+
+    if (surge) {
+      const last = lastAlertSent.get("surge") || 0;
+      if (Date.now() - last > ALERT_COOLDOWN) {
+        lastAlertSent.set("surge", Date.now());
+        const msg =
+          `🚨 *Issue Surge Alert*\n\nUnusual spike in reported issues\\!\n\n` +
+          `🐛 Issues in last 30 min: *${surge.recent_issues}*\n` +
+          `📊 Hourly average: *${surge.hourly_avg.toFixed(1)}*`;
+        const reportChat = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
+        if (reportChat) await sendTelegramMessage(reportChat, msg).catch(() => {});
+        const channelId = process.env.REPORT_CHANNEL_ID;
+        if (channelId) {
+          const ch = await client.channels.fetch(channelId).catch(() => null);
+          if (ch) await ch.send({ embeds: [
+            new EmbedBuilder()
+              .setTitle("🚨 Issue Surge Alert")
+              .setDescription(`Unusual spike in reported issues!\n\n🐛 Issues in last 30 min: **${surge.recent_issues}**\n📊 Hourly average: **${surge.hourly_avg.toFixed(1)}**`)
+              .setColor(0xe67e22).setTimestamp()
+          ]}).catch(() => {});
+        }
+        console.log("🚨 Sent issue surge alert");
+      }
+    }
+  } catch (err) {
+    console.error("❌ Alert check failed:", err.message);
+  }
+}
+
 // ─── Schedule Reports ─────────────────────────────────────────────────────────
-function scheduleReports() {
-  const dailyCron = process.env.REPORT_CRON || "0 9 * * *";
+let dailyCronTask = null;
+
+async function scheduleReports() {
+  // Load saved cron time from DB (falls back to env var or default 9 AM)
+  const savedCron = await getSetting("daily_cron").catch(() => null);
+  const dailyCron = savedCron || process.env.REPORT_CRON || "0 9 * * *";
+
   if (cron.validate(dailyCron)) {
-    cron.schedule(dailyCron, async () => {
+    dailyCronTask = cron.schedule(dailyCron, async () => {
       if (isReportPaused("daily")) {
         console.log(`⏸️  Daily report skipped (${reportState.dailySkipCount} remaining).`);
         consumeSkip("daily");
@@ -105,6 +174,25 @@ function scheduleReports() {
     });
     console.log(`📋 Weekly digest scheduled: "${weeklyCron}" (every Monday)`);
   }
+
+  // Register the reschedule callback so telegram.js can call it via scheduler.js
+  registerReschedule(async (newCron) => {
+    if (!cron.validate(newCron)) return false;
+    if (dailyCronTask) { dailyCronTask.stop(); dailyCronTask = null; }
+    dailyCronTask = cron.schedule(newCron, async () => {
+      if (isReportPaused("daily")) { consumeSkip("daily"); return; }
+      console.log("⏰ Running daily sentiment report...");
+      await sendDailyReport(client);
+      await sendTelegramDailyReport();
+    });
+    await setSetting("daily_cron", newCron);
+    console.log(`📅 Daily report rescheduled to: "${newCron}"`);
+    return true;
+  });
+
+  // Proactive alert check every 15 minutes
+  cron.schedule("*/15 * * * *", checkAndSendAlerts);
+  console.log("🔔 Proactive alert checks scheduled (every 15 min)");
 }
 
 // ─── Ready ────────────────────────────────────────────────────────────────────
@@ -122,7 +210,7 @@ client.once("clientReady", async () => {
 
   await registerCommandsForGuild(process.env.GUILD_ID);
   await registerCommandsForGuild(process.env.GUILD_ID_2);
-  scheduleReports();
+  await scheduleReports();
   startTelegramBot();
 });
 

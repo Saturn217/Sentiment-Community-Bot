@@ -3,6 +3,7 @@ const {
   getSummary, getTrend, getChannelBreakdown, getTopUsers, getTodayCount,
   getCategorySummary, getRecentIssues, getRecentFeedback, getCommunityBreakdown,
   getWeeklyStats, getWeeklyTopUsers, getWeeklyIssuesAndFeedback,
+  getWeekOverWeekComparison,
 } = require("./database");
 
 // ─── Shared Helpers ───────────────────────────────────────────────────────────
@@ -68,12 +69,13 @@ function buildCommunitySummary(positive, negative, neutral, count, issueCount, f
 
 // ─── Daily Report Data ────────────────────────────────────────────────────────
 async function fetchReportData() {
-  const [summary, trend, channels, topUsers, { count }, categorySummary, recentIssues, recentFeedback, communities] =
+  const [summary, trend, channels, topUsers, { count }, categorySummary, recentIssues, recentFeedback, communities, wow] =
     await Promise.all([
       getSummary(1), getTrend(7), getChannelBreakdown(1), getTopUsers(1), getTodayCount(),
       getCategorySummary(1), getRecentIssues(1,5), getRecentFeedback(1,5), getCommunityBreakdown(1),
+      getWeekOverWeekComparison(),
     ]);
-  return { summary, trend, channels, topUsers, count, categorySummary, recentIssues, recentFeedback, communities };
+  return { summary, trend, channels, topUsers, count, categorySummary, recentIssues, recentFeedback, communities, wow };
 }
 
 // ─── Daily Discord Embed ──────────────────────────────────────────────────────
@@ -173,7 +175,7 @@ async function buildDailyReport() {
 
 // ─── Daily Telegram Text ──────────────────────────────────────────────────────
 async function buildTelegramReport() {
-  const { summary, trend, count, recentIssues, recentFeedback, communities, categorySummary } = await fetchReportData();
+  const { summary, trend, count, recentIssues, recentFeedback, communities, categorySummary, wow } = await fetchReportData();
 
   let positive = 0, negative = 0, neutral = 0, totalScore = 0;
   summary.forEach(({ label, count: c, avg_score }) => {
@@ -259,6 +261,29 @@ async function buildTelegramReport() {
     `📅 *7-Day Trend*`,
     ``,
     trendLines,
+    ``,
+    D,
+    `📈 *vs Last Week*`,
+    ``,
+    (() => {
+      if (!wow) return "_Comparison data not available yet._";
+      const wowDelta  = n => {
+        if (!n.last) return n.this > 0 ? `↑ +${n.this} (new)` : "→ no data";
+        const pct = Math.round(((n.this - n.last) / n.last) * 100);
+        const dir = pct > 0 ? "↑" : pct < 0 ? "↓" : "→";
+        return `${dir} ${pct > 0 ? "+" : ""}${pct}% (${n.last} → ${n.this})`;
+      };
+      const scoreDir = (a, b) => {
+        if (b === null || b === undefined) return "→ no prior data";
+        const d = (a||0) - (b||0);
+        return `${d > 0.01 ? "↑" : d < -0.01 ? "↓" : "→"} ${d > 0 ? "+" : ""}${d.toFixed(3)}`;
+      };
+      return [
+        `💬 Messages: *${wow.this_week}* — ${wowDelta({ this: wow.this_week||0, last: wow.last_week||0 })}`,
+        `😊 Mood: *${scoreToWords(wow.this_score||0)}* — ${scoreDir(wow.this_score, wow.last_score)}`,
+        `🐛 Issues: *${wow.this_issues}* — ${wowDelta({ this: wow.this_issues||0, last: wow.last_issues||0 })}`,
+      ].join("\n");
+    })(),
     ``,
     D,
     `🐛 *Issues Today* _(${issueCount})_`,
@@ -352,8 +377,8 @@ async function buildWeeklyDigest() {
 
 // ─── Weekly Telegram Text ─────────────────────────────────────────────────────
 async function buildWeeklyDigestTelegram() {
-  const [weeklyStats, { issues, feedback }, communities] = await Promise.all([
-    getWeeklyStats(), getWeeklyIssuesAndFeedback(), getCommunityBreakdown(7),
+  const [weeklyStats, { issues, feedback }, communities, wow] = await Promise.all([
+    getWeeklyStats(), getWeeklyIssuesAndFeedback(), getCommunityBreakdown(7), getWeekOverWeekComparison(),
   ]);
 
   let totalMsgs = 0, totalScore = 0, totalIssues = 0, totalFeedback = 0;
@@ -428,6 +453,29 @@ async function buildWeeklyDigestTelegram() {
       `🌐 *Community Performance*`,
       ``,
       communityLines,
+      ``,
+      D,
+      `📈 *vs Prior Week*`,
+      ``,
+      (() => {
+        if (!wow) return "_Comparison data not available yet._";
+        const wowDelta = n => {
+          if (!n.last) return n.this > 0 ? `↑ +${n.this} (new)` : "→ no data";
+          const pct = Math.round(((n.this - n.last) / n.last) * 100);
+          const dir = pct > 0 ? "↑" : pct < 0 ? "↓" : "→";
+          return `${dir} ${pct > 0 ? "+" : ""}${pct}% (${n.last} → ${n.this})`;
+        };
+        const scoreDir = (a, b) => {
+          if (b === null || b === undefined) return "→ no prior data";
+          const d = (a||0) - (b||0);
+          return `${d > 0.01 ? "↑" : d < -0.01 ? "↓" : "→"} ${d > 0 ? "+" : ""}${d.toFixed(3)}`;
+        };
+        return [
+          `💬 Messages: *${wow.this_week}* — ${wowDelta({ this: wow.this_week||0, last: wow.last_week||0 })}`,
+          `😊 Mood: — ${scoreDir(wow.this_score, wow.last_score)}`,
+          `🐛 Issues: *${wow.this_issues}* — ${wowDelta({ this: wow.this_issues||0, last: wow.last_issues||0 })}`,
+        ].join("\n");
+      })(),
     ].join("\n"),
 
     // ── Message 2: Issues + Feedback ──

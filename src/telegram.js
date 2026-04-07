@@ -4,7 +4,9 @@ const {
   getSummary, getTrend, getChannelBreakdown, getRecentIssues, getRecentFeedback,
   getCommunityBreakdown, insertSentiment, deleteByMessageId, cleanOldRecords,
   getCategorySummary, deleteAllByUser,
+  getConversationHistory, saveConversationTurn, clearConversationHistory,
 } = require("./database");
+const { rescheduleDailyCron } = require("./scheduler");
 const { buildTelegramReport, buildWeeklyDigestTelegram } = require("./reporter");
 const { analyzeSentiment } = require("./sentiment");
 const { classifyMessageAI, isSpam } = require("./classifier");
@@ -76,22 +78,23 @@ function fetchUrl(url, redirectsLeft = 3) {
 // Bot's own username — fetched from Telegram on startup, used to detect @mentions
 let BOT_USERNAME = "";
 
-// Per-chat conversation history — Map<chatId, [{role, content}]>
-// Kept in memory; clears on restart. Upgrade to DB/Redis for persistence.
-const conversationHistory = new Map();
-const MAX_HISTORY_TURNS   = 10; // keep last 10 user/assistant pairs
+// Per-chat conversation history — persisted in agent_conversations DB table.
+// Survives restarts. Each chat keeps up to 20 messages (10 turns).
 
-function getHistory(chatId) {
-  if (!conversationHistory.has(chatId)) conversationHistory.set(chatId, []);
-  return conversationHistory.get(chatId);
+async function getHistory(chatId) {
+  try {
+    return await getConversationHistory(chatId);
+  } catch (err) {
+    console.error("❌ Failed to load conversation history:", err.message);
+    return [];
+  }
 }
 
-function pushHistory(chatId, role, content) {
-  const history = getHistory(chatId);
-  history.push({ role, content });
-  // Trim to MAX_HISTORY_TURNS pairs (each pair = 2 entries)
-  if (history.length > MAX_HISTORY_TURNS * 2) {
-    history.splice(0, history.length - MAX_HISTORY_TURNS * 2);
+async function pushHistory(chatId, role, content) {
+  try {
+    await saveConversationTurn(chatId, role, content);
+  } catch (err) {
+    console.error("❌ Failed to save conversation turn:", err.message);
   }
 }
 
@@ -110,11 +113,11 @@ async function buildLiveContext() {
       trend,
       channels,
     ] = await Promise.all([
-      getSummary(7),
-      getCommunityBreakdown(7),
-      getRecentIssues(7, 10),
-      getRecentFeedback(7, 10),
-      getTrend(7),
+      getSummary(30),
+      getCommunityBreakdown(30),
+      getRecentIssues(30, 15),
+      getRecentFeedback(30, 15),
+      getTrend(30),
       getChannelBreakdown(1),
     ]);
 
@@ -140,7 +143,7 @@ async function buildLiveContext() {
                        : "Very unhappy";
 
     let ctx = `Today is ${today}.\n\n`;
-    ctx += `## LIVE COMMUNITY SENTIMENT DATA (last 7 days)\n\n`;
+    ctx += `## LIVE COMMUNITY SENTIMENT DATA (last 30 days)\n\n`;
     ctx += `**Overall mood:** ${overallMood} (score: ${overallScore.toFixed(3)})\n`;
     ctx += `**Total messages tracked:** ${totalMsgs}\n`;
     ctx += `**Positive:** ${labelCounts.positive || 0} | **Neutral:** ${labelCounts.neutral || 0} | **Negative:** ${labelCounts.negative || 0}\n\n`;
@@ -155,9 +158,9 @@ async function buildLiveContext() {
       ctx += "\n";
     }
 
-    // ── 7-day trend ───────────────────────────────────────────────────────
+    // ── 30-day trend ──────────────────────────────────────────────────────
     if (trend.length) {
-      ctx += `## Day-by-Day Trend (last 7 days)\n`;
+      ctx += `## Day-by-Day Trend (last 30 days)\n`;
       trend.forEach(({ date, avg_score, message_count }) => {
         const d     = new Date(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
         const arrow = avg_score > 0.05 ? "↑" : avg_score < -0.05 ? "↓" : "→";
@@ -178,26 +181,26 @@ async function buildLiveContext() {
 
     // ── Recent issues ─────────────────────────────────────────────────────
     if (recentIssues.length) {
-      ctx += `## Recent Issues Reported (last 7 days) — ${recentIssues.length} total\n`;
+      ctx += `## Recent Issues Reported (last 30 days) — ${recentIssues.length} total\n`;
       recentIssues.forEach(({ username, community, platform, message_text, timestamp }) => {
         const when = new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" });
         ctx += `- [${when}] **${username}** (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
       });
       ctx += "\n";
     } else {
-      ctx += `## Recent Issues\nNo issues reported in the last 7 days.\n\n`;
+      ctx += `## Recent Issues\nNo issues reported in the last 30 days.\n\n`;
     }
 
     // ── Recent feedback ───────────────────────────────────────────────────
     if (recentFeedback.length) {
-      ctx += `## Recent Feedback (last 7 days) — ${recentFeedback.length} total\n`;
+      ctx += `## Recent Feedback (last 30 days) — ${recentFeedback.length} total\n`;
       recentFeedback.forEach(({ username, community, platform, message_text, timestamp }) => {
         const when = new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" });
         ctx += `- [${when}] **${username}** (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
       });
       ctx += "\n";
     } else {
-      ctx += `## Recent Feedback\nNo feedback submitted in the last 7 days.\n\n`;
+      ctx += `## Recent Feedback\nNo feedback submitted in the last 30 days.\n\n`;
     }
 
     return ctx;
@@ -213,7 +216,7 @@ async function buildLiveContext() {
  * Maintains per-chat conversation history for follow-up questions.
  */
 async function askClaude(chatId, userMessage) {
-  const history    = getHistory(chatId);
+  const history    = await getHistory(chatId);
   const liveData   = await buildLiveContext();
   const messages   = [...history, { role: "user", content: userMessage }];
 
@@ -241,8 +244,8 @@ async function askClaude(chatId, userMessage) {
   const reply = response.content[0].text;
 
   // Save this turn so follow-up questions have context
-  pushHistory(chatId, "user", userMessage);
-  pushHistory(chatId, "assistant", reply);
+  await pushHistory(chatId, "user", userMessage);
+  await pushHistory(chatId, "assistant", reply);
 
   return reply;
 }
@@ -446,10 +449,33 @@ async function handleCommand(msg) {
       }
       return replyWithClaude(chatId, query, msg.message_id);
 
-    // ── NEW: /clearchat — reset conversation memory ──────────────────────────
+    // ── /clearchat — reset conversation memory ───────────────────────────────
     } else if (text.startsWith("/clearchat")) {
-      conversationHistory.delete(String(chatId));
+      await clearConversationHistory(String(chatId));
       return sendMessage(chatId, "🧹 Conversation history cleared! Starting fresh.");
+
+    // ── /setreporttime HH:MM — change daily report schedule ─────────────────
+    } else if (text.startsWith("/setreporttime")) {
+      const timeArg = text.split(" ")[1]?.trim();
+      const match   = timeArg?.match(/^(\d{1,2}):(\d{2})$/);
+      if (!match) {
+        return sendMessage(chatId,
+          `⚠️ Usage: \`/setreporttime HH:MM\`\n\nExample: \`/setreporttime 10:30\`\nSets the daily report to fire at 10:30 AM UTC.`
+        );
+      }
+      const hour = parseInt(match[1], 10);
+      const min  = parseInt(match[2], 10);
+      if (hour > 23 || min > 59) {
+        return sendMessage(chatId, "⚠️ Invalid time. Hours must be 0–23, minutes 0–59.");
+      }
+      const cronExpr = `${min} ${hour} * * *`;
+      const ok = await rescheduleDailyCron(cronExpr);
+      if (ok) {
+        return sendMessage(chatId,
+          `✅ Daily report rescheduled to *${String(hour).padStart(2,"0")}:${String(min).padStart(2,"0")} UTC*.\n_Next report fires tomorrow at that time._`
+        );
+      }
+      return sendMessage(chatId, "⚠️ Could not reschedule — bot may still be starting up. Try again in a moment.");
 
     } else if (text.startsWith("/report")) {
       await sendMessage(chatId, "⏳ Generating combined report...");
@@ -721,6 +747,7 @@ async function handleCommand(msg) {
         `*📊 Report Commands:*\n` +
         `/report — Daily report\n` +
         `/weeklyreport — Weekly digest\n` +
+        `/setreporttime \\[HH:MM\\] — Change daily report time\n` +
         `/pausereport \\[daily|weekly|both\\] \\[days\\]\n` +
         `/resumereport \\[daily|weekly|both\\]\n` +
         `/reportstatus — Check report pause status\n\n` +

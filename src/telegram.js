@@ -639,6 +639,26 @@ async function handleCommand(msg) {
         `_Both Discord and Telegram share the same status\\._`
       );
 
+    } else if (text.startsWith("/pausealerts")) {
+      const { setSetting } = require("./database");
+      const hours = parseFloat(text.split(" ")[1]);
+      if (hours && hours > 0) {
+        const until = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+        await setSetting("alerts_paused_until", until);
+        return sendMessage(chatId,
+          `🔕 Proactive alerts paused for *${hours}h*\\.\nThey will resume automatically at ${new Date(until).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", timeZone: "UTC" })} UTC\\.`
+        );
+      } else {
+        // Pause indefinitely
+        await setSetting("alerts_paused_until", "9999-12-31T23:59:59Z");
+        return sendMessage(chatId, `🔕 Proactive alerts paused *indefinitely*\\. Use /resumealerts to turn back on\\.`);
+      }
+
+    } else if (text.startsWith("/resumealerts")) {
+      const { setSetting } = require("./database");
+      await setSetting("alerts_paused_until", new Date(0).toISOString());
+      return sendMessage(chatId, `🔔 Proactive alerts *resumed*\\. Spike and surge detection is active again\\.`);
+
     } else if (text.startsWith("/tgdeleteuser")) {
       const parts    = text.split(" ");
       const username = parts[1]?.replace("@", "").trim();
@@ -754,7 +774,9 @@ async function handleCommand(msg) {
         `/setreporttime \\[HH:MM\\] — Change daily report time\n` +
         `/pausereport \\[daily|weekly|both\\] \\[days\\]\n` +
         `/resumereport \\[daily|weekly|both\\]\n` +
-        `/reportstatus — Check report pause status\n\n` +
+        `/reportstatus — Check report pause status\n` +
+        `/pausealerts \\[hours\\] — Silence spike/surge alerts\n` +
+        `/resumealerts — Re\\-enable alerts\n\n` +
         `*📈 Analytics Commands:*\n` +
         `/sentiment \\[days\\] — Sentiment summary\n` +
         `/channels \\[days\\] — Per\\-channel breakdown\n` +

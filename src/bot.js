@@ -76,6 +76,10 @@ const ALERT_COOLDOWN  = 2 * 60 * 60 * 1000; // 2 hours
 
 async function checkAndSendAlerts() {
   try {
+    // Check if alerts are paused
+    const pausedUntil = await getSetting("alerts_paused_until").catch(() => null);
+    if (pausedUntil && new Date(pausedUntil) > new Date()) return;
+
     const [spike, surge] = await Promise.all([detectSentimentSpike(), detectIssueSurge()]);
 
     if (spike) {

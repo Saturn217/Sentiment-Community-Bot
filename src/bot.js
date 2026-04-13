@@ -213,7 +213,7 @@ async function startCore() {
 startCore();
 
 // ─── Ready ────────────────────────────────────────────────────────────────────
-client.once("clientReady", async () => {
+client.once("ready", async () => {
   console.log(`\n🤖 Discord: Logged in as ${client.user.tag}`);
   console.log(`📊 Tracking sentiment in guild: ${process.env.GUILD_ID}`);
   console.log(`📬 Reports channel: ${process.env.REPORT_CHANNEL_ID}\n`);
@@ -331,9 +331,13 @@ client.on("guildMemberRemove", async (member) => {
 
 // ─── Slash Commands ───────────────────────────────────────────────────────────
 client.on("interactionCreate", async (interaction) => {
+  console.log(`🎮 Interaction: type=${interaction.type} isChatInput=${interaction.isChatInputCommand()} name=${interaction.commandName||'n/a'}`);
   if (!interaction.isChatInputCommand()) return;
   const command = client.commands.get(interaction.commandName);
-  if (!command) return;
+  if (!command) {
+    console.error(`❌ Unknown command: ${interaction.commandName}`);
+    return interaction.reply({ content: "Unknown command.", ephemeral: true });
+  }
   try {
     await command.execute(interaction);
   } catch (err) {

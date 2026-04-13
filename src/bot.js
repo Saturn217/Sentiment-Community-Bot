@@ -351,6 +351,13 @@ client.on("interactionCreate", async (interaction) => {
 // ─── Error Handling ───────────────────────────────────────────────────────────
 client.on("error", err => console.error("❌ Client error:", err.message));
 client.on("warn",  msg => console.warn("⚠️  Warning:", msg));
+client.on("debug", msg => {
+  if (msg.includes("Connecting") || msg.includes("connect") || msg.includes("identify") ||
+      msg.includes("HELLO") || msg.includes("token") || msg.includes("gateway") ||
+      msg.includes("WebSocket") || msg.includes("ws")) {
+    console.log("🔍 Discord:", msg);
+  }
+});
 process.on("uncaughtException",  err => console.error("❌ Uncaught Exception:", err));
 process.on("unhandledRejection", err => console.error("❌ Unhandled Rejection:", err));
 
@@ -382,7 +389,7 @@ http.createServer(async (req, res) => {
 async function loginDiscord() {
   console.log("🔑 Attempting Discord login...");
   const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Login timed out after 20s — Discord gateway unreachable")), 20000)
+    setTimeout(() => reject(new Error("Login timed out after 30s — Discord gateway unreachable")), 30000)
   );
   try {
     await Promise.race([client.login(process.env.DISCORD_TOKEN), timeout]);

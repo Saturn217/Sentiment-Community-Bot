@@ -199,23 +199,28 @@ async function scheduleReports() {
   console.log("🔔 Proactive alert checks scheduled (every 15 min)");
 }
 
-// ─── Ready ────────────────────────────────────────────────────────────────────
-client.once("clientReady", async () => {
-  console.log(`\n🤖 Discord: Logged in as ${client.user.tag}`);
-  console.log(`📊 Tracking sentiment in guild: ${process.env.GUILD_ID}`);
-  console.log(`📬 Reports channel: ${process.env.REPORT_CHANNEL_ID}\n`);
-
+// ─── Startup — DB + Telegram run independently of Discord ────────────────────
+async function startCore() {
   try {
     await initDB();
     await loadCustomKeywords();
   } catch (err) {
     console.error("❌ Database connection failed:", err.message);
   }
+  startTelegramBot();
+}
+
+startCore();
+
+// ─── Ready ────────────────────────────────────────────────────────────────────
+client.once("clientReady", async () => {
+  console.log(`\n🤖 Discord: Logged in as ${client.user.tag}`);
+  console.log(`📊 Tracking sentiment in guild: ${process.env.GUILD_ID}`);
+  console.log(`📬 Reports channel: ${process.env.REPORT_CHANNEL_ID}\n`);
 
   await registerCommandsForGuild(process.env.GUILD_ID);
   await registerCommandsForGuild(process.env.GUILD_ID_2);
   await scheduleReports();
-  startTelegramBot();
 });
 
 // ─── 30-Second Delay Queue ────────────────────────────────────────────────────

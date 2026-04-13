@@ -239,7 +239,8 @@ async function buildTelegramReport() {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
   const D = "━━━━━━━━━━━━━━━━━━━━";
 
-  return [
+  // ── Part 1: Overview + Stats ──────────────────────────────────────────────
+  const part1 = [
     `${moodEmoji} *Daily Sentiment Report*`,
     `_${today}_`,
     ``,
@@ -284,8 +285,10 @@ async function buildTelegramReport() {
         `🐛 Issues: *${wow.this_issues}* — ${wowDelta({ this: wow.this_issues||0, last: wow.last_issues||0 })}`,
       ].join("\n");
     })(),
-    ``,
-    D,
+  ].join("\n");
+
+  // ── Part 2: Issues + Feedback ─────────────────────────────────────────────
+  const part2 = [
     `🐛 *Issues Today* _(${issueCount})_`,
     ``,
     issueLines,
@@ -298,6 +301,8 @@ async function buildTelegramReport() {
     D,
     `_Sentiment Bot · Daily Report_`,
   ].join("\n");
+
+  return [part1, part2];
 }
 
 // ─── Weekly Discord Embed ─────────────────────────────────────────────────────

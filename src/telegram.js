@@ -235,7 +235,7 @@ async function askClaude(chatId, userMessage) {
     ) + "\n\n" + docsSection + liveData;
 
   const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-6",
     max_tokens: 1024,
     system: systemPrompt,
     messages,
@@ -479,7 +479,8 @@ async function handleCommand(msg) {
 
     } else if (text.startsWith("/report")) {
       await sendMessage(chatId, "⏳ Generating combined report...");
-      await sendMessage(chatId, await buildTelegramReport());
+      const reportParts = await buildTelegramReport();
+      for (const part of reportParts) await sendMessage(chatId, part);
 
     } else if (text.startsWith("/weeklyreport")) {
       await sendMessage(chatId, "⏳ Generating weekly digest...");
@@ -867,7 +868,8 @@ async function poll() {
 async function sendTelegramDailyReport() {
   if (!TG_REPORT_CHAT_ID) { console.warn("⚠️  No TELEGRAM_REPORT_CHAT_ID set — skipping."); return; }
   try {
-    await sendMessage(TG_REPORT_CHAT_ID, await buildTelegramReport());
+    const parts = await buildTelegramReport();
+    for (const part of parts) await sendMessage(TG_REPORT_CHAT_ID, part);
     console.log("✅ Telegram daily report sent.");
   } catch (err) { console.error("❌ Failed to send Telegram report:", err.message); }
 }

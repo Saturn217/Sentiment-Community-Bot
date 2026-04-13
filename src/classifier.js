@@ -108,7 +108,7 @@ async function classifyMessageAI(text) {
 
   try {
     const response = await getClient().messages.create({
-      model:      "claude-haiku-4-5",
+      model:      "claude-haiku-4-5-20251001",
       max_tokens: 10,
       system:
         "Classify this community message as exactly one word: " +

@@ -199,7 +199,7 @@ async function scheduleReports() {
   console.log("🔔 Proactive alert checks scheduled (every 15 min)");
 }
 
-// ─── Startup — DB + Telegram run independently of Discord ────────────────────
+// ─── Startup — DB + Telegram + Cron run independently of Discord ─────────────
 async function startCore() {
   try {
     await initDB();
@@ -208,6 +208,7 @@ async function startCore() {
     console.error("❌ Database connection failed:", err.message);
   }
   startTelegramBot();
+  await scheduleReports(); // runs regardless of Discord connection
 }
 
 startCore();
@@ -220,7 +221,6 @@ client.once("clientReady", async () => {
 
   await registerCommandsForGuild(process.env.GUILD_ID);
   await registerCommandsForGuild(process.env.GUILD_ID_2);
-  await scheduleReports();
 });
 
 // ─── 30-Second Delay Queue ────────────────────────────────────────────────────

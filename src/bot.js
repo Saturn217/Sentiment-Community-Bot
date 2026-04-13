@@ -213,7 +213,7 @@ async function startCore() {
 startCore();
 
 // ─── Ready ────────────────────────────────────────────────────────────────────
-client.once("ready", async () => {
+client.once("clientReady", async () => {
   console.log(`\n🤖 Discord: Logged in as ${client.user.tag}`);
   console.log(`📊 Tracking sentiment in guild: ${process.env.GUILD_ID}`);
   console.log(`📬 Reports channel: ${process.env.REPORT_CHANNEL_ID}\n`);
@@ -406,7 +406,7 @@ async function loginDiscord() {
 
   console.log("🔑 Attempting Discord login...");
   const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Login timed out after 30s")), 30000)
+    setTimeout(() => reject(new Error("Login timed out after 60s")), 60000)
   );
   try {
     await Promise.race([client.login(process.env.DISCORD_TOKEN), timeout]);

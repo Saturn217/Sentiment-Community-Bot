@@ -387,9 +387,26 @@ http.createServer(async (req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 async function loginDiscord() {
+  // Test if Discord's API is reachable before attempting login
+  try {
+    const https = require("https");
+    await new Promise((resolve, reject) => {
+      const req = https.get("https://discord.com/api/v10/gateway", { timeout: 10000 }, (res) => {
+        console.log(`🔍 Discord API reachable — HTTP ${res.statusCode}`);
+        resolve();
+      });
+      req.on("error",   err => reject(new Error(`Discord API unreachable: ${err.message}`)));
+      req.on("timeout", ()  => { req.destroy(); reject(new Error("Discord API request timed out")); });
+    });
+  } catch (err) {
+    console.error(`❌ Pre-login check failed: ${err.message}`);
+    console.error("❌ Render cannot reach discord.com — Discord bot will be offline");
+    return;
+  }
+
   console.log("🔑 Attempting Discord login...");
   const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Login timed out after 30s — Discord gateway unreachable")), 30000)
+    setTimeout(() => reject(new Error("Login timed out after 30s")), 30000)
   );
   try {
     await Promise.race([client.login(process.env.DISCORD_TOKEN), timeout]);

@@ -842,7 +842,13 @@ async function poll() {
         }
 
         // ── Agent: Groups — respond only when mentioned or replied to ────────
-        if (isBotMentioned(msg) || isReplyToBot(msg)) {
+        const mentioned = isBotMentioned(msg);
+        const replied   = isReplyToBot(msg);
+        if (!isMonitored) {
+          // Log all non-monitored group messages so we can see what arrives
+          console.log(`📩 Non-monitored group ${msgChatId}: mentioned=${mentioned} replied=${replied} text="${(msg.text||"").slice(0,60)}"`);
+        }
+        if (mentioned || replied) {
           const query = stripMention(msg.text || "").trim();
           await replyWithClaude(msgChatId, query, msg.message_id);
           // Still track sentiment for the message (don't skip)

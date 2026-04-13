@@ -379,7 +379,17 @@ http.createServer(async (req, res) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-console.log("🔑 Attempting Discord login...");
-client.login(process.env.DISCORD_TOKEN)
-  .then(() => console.log("🔑 Login successful"))
-  .catch(err => console.error("❌ Login failed:", err.message));
+async function loginDiscord() {
+  console.log("🔑 Attempting Discord login...");
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Login timed out after 20s — Discord gateway unreachable")), 20000)
+  );
+  try {
+    await Promise.race([client.login(process.env.DISCORD_TOKEN), timeout]);
+    console.log("🔑 Login successful");
+  } catch (err) {
+    console.error("❌ Login failed:", err.message);
+  }
+}
+
+loginDiscord();

@@ -257,11 +257,13 @@ async function askClaude(chatId, userMessage) {
       "The live data includes both last 24 hours and last 7 days of issues and feedback, clearly labelled. " +
       "Match your answer to what was asked: if they ask about today's issues use the 24h data, if they ask about this week use the 7-day data. " +
       "Never mix timeframes in a single answer — be precise about which period you're reporting on.\n\n" +
-      "FORMATTING RULES — you are replying in Telegram, follow these strictly:\n" +
-      "- Use *bold* for emphasis (single asterisk), NOT **double asterisk**\n" +
-      "- Never use # or ## or ### for headings — use *HEADING* (bold caps) instead\n" +
-      "- Use plain bullet points with - or •\n" +
-      "- No backslash escaping of brackets, parentheses, or other characters\n" +
+      "FORMATTING RULES — responses are rendered in Telegram with HTML parse mode:\n" +
+      "- Use <b>text</b> for bold headings and emphasis\n" +
+      "- Use <i>text</i> for subtle emphasis or quotes\n" +
+      "- Never use # ## ### Markdown headers — use <b>HEADING</b> instead\n" +
+      "- Never use ** or * for bold/italic — only HTML tags\n" +
+      "- No backslash escaping of any characters\n" +
+      "- Bullet points with • or numbers (1. 2. 3.)\n" +
       "- Keep responses concise and scannable\n" +
       "- When listing issues or feedback, mention the username and community\n" +
       "- If the data doesn't answer the question, say so honestly"
@@ -361,19 +363,20 @@ async function replyWithClaude(chatId, query, replyToMessageId) {
     if (remaining) chunks.push(remaining);
 
     for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
+      const chunk   = chunks[i];
       const replyId = i === 0 ? replyToMessageId : undefined;
       try {
         await tgRequest("sendMessage", {
-          chat_id:             chatId,
-          text:                chunk,
-          parse_mode:          "Markdown",
+          chat_id:    chatId,
+          text:       chunk,
+          parse_mode: "HTML",
           ...(replyId ? { reply_to_message_id: replyId } : {}),
         });
       } catch {
+        // Fallback: strip all HTML tags and send as plain text
         await tgRequest("sendMessage", {
           chat_id: chatId,
-          text:    chunk.replace(/[*`_[\]()~>#+=|{}.!-]/g, "\\$&"),
+          text:    chunk.replace(/<[^>]+>/g, ""),
           ...(replyId ? { reply_to_message_id: replyId } : {}),
         });
       }

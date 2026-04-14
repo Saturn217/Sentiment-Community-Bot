@@ -316,20 +316,34 @@ async function replyWithClaude(chatId, query, replyToMessageId) {
 
     const answer = await askClaude(String(chatId), query);
 
-    // Try Markdown first, fall back to plain text if it fails
-    try {
-      await tgRequest("sendMessage", {
-        chat_id:             chatId,
-        text:                answer,
-        parse_mode:          "Markdown",
-        reply_to_message_id: replyToMessageId,
-      });
-    } catch {
-      await tgRequest("sendMessage", {
-        chat_id:             chatId,
-        text:                answer.replace(/[*`_[\]()~>#+=|{}.!-]/g, "\\$&"),
-        reply_to_message_id: replyToMessageId,
-      });
+    // Split into ≤4000-char chunks so Telegram never rejects the message
+    const chunks = [];
+    let remaining = answer;
+    while (remaining.length > 4000) {
+      const cut = remaining.lastIndexOf("\n", 4000);
+      const splitAt = cut > 0 ? cut : 4000;
+      chunks.push(remaining.slice(0, splitAt).trim());
+      remaining = remaining.slice(splitAt).trim();
+    }
+    if (remaining) chunks.push(remaining);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const replyId = i === 0 ? replyToMessageId : undefined;
+      try {
+        await tgRequest("sendMessage", {
+          chat_id:             chatId,
+          text:                chunk,
+          parse_mode:          "Markdown",
+          ...(replyId ? { reply_to_message_id: replyId } : {}),
+        });
+      } catch {
+        await tgRequest("sendMessage", {
+          chat_id: chatId,
+          text:    chunk.replace(/[*`_[\]()~>#+=|{}.!-]/g, "\\$&"),
+          ...(replyId ? { reply_to_message_id: replyId } : {}),
+        });
+      }
     }
   } catch (err) {
     console.error("❌ Claude agent error:", err.message);
@@ -354,7 +368,13 @@ function tgRequest(method, body) {
     const req = https.request(options, (res) => {
       let raw = "";
       res.on("data", chunk => raw += chunk);
-      res.on("end", () => { try { resolve(JSON.parse(raw)); } catch (e) { reject(e); } });
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(raw);
+          if (!parsed.ok) reject(new Error(`Telegram API error: ${parsed.description || "unknown"}`));
+          else resolve(parsed);
+        } catch (e) { reject(e); }
+      });
     });
     req.on("error", reject);
     req.write(data);

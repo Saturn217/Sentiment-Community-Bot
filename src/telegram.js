@@ -108,16 +108,20 @@ async function buildLiveContext() {
     const [
       summary,
       communities,
-      recentIssues,
-      recentFeedback,
+      issues24h,
+      feedback24h,
+      issues7d,
+      feedback7d,
       trend,
       channels,
     ] = await Promise.all([
-      getSummary(30),
-      getCommunityBreakdown(30),
-      getRecentIssues(30, 15),
-      getRecentFeedback(30, 15),
-      getTrend(30),
+      getSummary(1),
+      getCommunityBreakdown(1),
+      getRecentIssues(1, 30),
+      getRecentFeedback(1, 30),
+      getRecentIssues(7, 50),
+      getRecentFeedback(7, 50),
+      getTrend(7),
       getChannelBreakdown(1),
     ]);
 
@@ -143,35 +147,34 @@ async function buildLiveContext() {
                        : "Very unhappy";
 
     let ctx = `Today is ${today}.\n\n`;
-    ctx += `## LIVE COMMUNITY SENTIMENT DATA (last 30 days)\n\n`;
-    ctx += `**Overall mood:** ${overallMood} (score: ${overallScore.toFixed(3)})\n`;
-    ctx += `**Total messages tracked:** ${totalMsgs}\n`;
-    ctx += `**Positive:** ${labelCounts.positive || 0} | **Neutral:** ${labelCounts.neutral || 0} | **Negative:** ${labelCounts.negative || 0}\n\n`;
+    ctx += `LIVE COMMUNITY DATA — Last 24 Hours\n\n`;
+    ctx += `Overall mood: ${overallMood} (score: ${overallScore.toFixed(3)})\n`;
+    ctx += `Total messages: ${totalMsgs} | Positive: ${labelCounts.positive || 0} | Neutral: ${labelCounts.neutral || 0} | Negative: ${labelCounts.negative || 0}\n\n`;
 
     // ── Per-community breakdown ────────────────────────────────────────────
     if (communities.length) {
-      ctx += `## Community Breakdown\n`;
+      ctx += `Community Breakdown (24h):\n`;
       communities.forEach(({ community, platform, message_count, avg_score, positive_count, negative_count, neutral_count }) => {
         const mood = avg_score > 0.05 ? "positive" : avg_score < -0.05 ? "negative" : "neutral";
-        ctx += `- **${community}** (${platform}): ${message_count} msgs, mood: ${mood} (${avg_score.toFixed(3)}), 😊${positive_count} 😐${neutral_count} 😠${negative_count}\n`;
+        ctx += `- ${community} (${platform}): ${message_count} msgs, ${mood}, 😊${positive_count} 😐${neutral_count} 😠${negative_count}\n`;
       });
       ctx += "\n";
     }
 
-    // ── 30-day trend ──────────────────────────────────────────────────────
+    // ── 7-day trend ──────────────────────────────────────────────────────
     if (trend.length) {
-      ctx += `## Day-by-Day Trend (last 30 days)\n`;
+      ctx += `7-Day Sentiment Trend:\n`;
       trend.forEach(({ date, avg_score, message_count }) => {
         const d     = new Date(date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
         const arrow = avg_score > 0.05 ? "↑" : avg_score < -0.05 ? "↓" : "→";
-        ctx += `- ${d}: ${arrow} score ${avg_score.toFixed(3)}, ${message_count} messages\n`;
+        ctx += `- ${d}: ${arrow} ${avg_score.toFixed(3)}, ${message_count} msgs\n`;
       });
       ctx += "\n";
     }
 
     // ── Active channels today ─────────────────────────────────────────────
     if (channels.length) {
-      ctx += `## Most Active Channels Today\n`;
+      ctx += `Active Channels Today:\n`;
       channels.forEach(({ community, channel_name, platform, avg_score, message_count }) => {
         const mood = avg_score > 0.05 ? "positive" : avg_score < -0.05 ? "negative" : "neutral";
         ctx += `- ${community}/#${channel_name} (${platform}): ${message_count} msgs, ${mood}\n`;
@@ -179,28 +182,50 @@ async function buildLiveContext() {
       ctx += "\n";
     }
 
-    // ── Recent issues ─────────────────────────────────────────────────────
-    if (recentIssues.length) {
-      ctx += `## Recent Issues Reported (last 30 days) — ${recentIssues.length} total\n`;
-      recentIssues.forEach(({ username, community, platform, message_text, timestamp }) => {
-        const when = new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-        ctx += `- [${when}] **${username}** (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
+    // ── Issues: 24h ───────────────────────────────────────────────────────
+    ctx += `Issues in the last 24 hours — ${issues24h.length} total:\n`;
+    if (issues24h.length) {
+      issues24h.forEach(({ username, community, platform, message_text, timestamp }) => {
+        const when = new Date(timestamp).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+        ctx += `- [${when}] ${username} (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
+      });
+    } else {
+      ctx += `- None\n`;
+    }
+    ctx += "\n";
+
+    // ── Issues: 7 days (excludes today's already listed above) ───────────
+    const issues7dOnly = issues7d.filter(i => !issues24h.some(j => j.message_id === i.message_id));
+    if (issues7dOnly.length) {
+      ctx += `Issues in the past 7 days (excluding today) — ${issues7dOnly.length} total:\n`;
+      issues7dOnly.forEach(({ username, community, platform, message_text, timestamp }) => {
+        const when = new Date(timestamp).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        ctx += `- [${when}] ${username} (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
       });
       ctx += "\n";
-    } else {
-      ctx += `## Recent Issues\nNo issues reported in the last 30 days.\n\n`;
     }
 
-    // ── Recent feedback ───────────────────────────────────────────────────
-    if (recentFeedback.length) {
-      ctx += `## Recent Feedback (last 30 days) — ${recentFeedback.length} total\n`;
-      recentFeedback.forEach(({ username, community, platform, message_text, timestamp }) => {
-        const when = new Date(timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-        ctx += `- [${when}] **${username}** (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
+    // ── Feedback: 24h ─────────────────────────────────────────────────────
+    ctx += `Feedback in the last 24 hours — ${feedback24h.length} total:\n`;
+    if (feedback24h.length) {
+      feedback24h.forEach(({ username, community, platform, message_text, timestamp }) => {
+        const when = new Date(timestamp).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+        ctx += `- [${when}] ${username} (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
+      });
+    } else {
+      ctx += `- None\n`;
+    }
+    ctx += "\n";
+
+    // ── Feedback: 7 days ──────────────────────────────────────────────────
+    const feedback7dOnly = feedback7d.filter(i => !feedback24h.some(j => j.message_id === i.message_id));
+    if (feedback7dOnly.length) {
+      ctx += `Feedback in the past 7 days (excluding today) — ${feedback7dOnly.length} total:\n`;
+      feedback7dOnly.forEach(({ username, community, platform, message_text, timestamp }) => {
+        const when = new Date(timestamp).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+        ctx += `- [${when}] ${username} (${community}/${platform}): ${message_text?.slice(0, 200)}\n`;
       });
       ctx += "\n";
-    } else {
-      ctx += `## Recent Feedback\nNo feedback submitted in the last 30 days.\n\n`;
     }
 
     return ctx;
@@ -227,11 +252,19 @@ async function askClaude(chatId, userMessage) {
 
   const systemPrompt =
     (process.env.AGENT_SYSTEM_PROMPT ||
-      "You are a helpful community intelligence assistant for this company, deployed in Telegram. " +
-      "Your job is to answer questions about community sentiment, issues, and feedback across all platforms " +
-      "(Discord and Telegram). Be clear and concise. Use bullet points where helpful. " +
-      "When quoting specific issues or feedback, always mention the username and community they came from. " +
-      "If the data doesn't answer the question, say so honestly."
+      "You are a helpful community intelligence assistant deployed in Telegram.\n" +
+      "Your job is to answer questions about community sentiment, issues, and feedback.\n" +
+      "The live data includes both last 24 hours and last 7 days of issues and feedback, clearly labelled. " +
+      "Match your answer to what was asked: if they ask about today's issues use the 24h data, if they ask about this week use the 7-day data. " +
+      "Never mix timeframes in a single answer — be precise about which period you're reporting on.\n\n" +
+      "FORMATTING RULES — you are replying in Telegram, follow these strictly:\n" +
+      "- Use *bold* for emphasis (single asterisk), NOT **double asterisk**\n" +
+      "- Never use # or ## or ### for headings — use *HEADING* (bold caps) instead\n" +
+      "- Use plain bullet points with - or •\n" +
+      "- No backslash escaping of brackets, parentheses, or other characters\n" +
+      "- Keep responses concise and scannable\n" +
+      "- When listing issues or feedback, mention the username and community\n" +
+      "- If the data doesn't answer the question, say so honestly"
     ) + "\n\n" + docsSection + liveData;
 
   const response = await anthropic.messages.create({

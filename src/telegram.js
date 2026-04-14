@@ -14,6 +14,12 @@ const { classifyMessageAI, isSpam } = require("./classifier");
 const TG_TOKEN          = process.env.TELEGRAM_TOKEN;
 const TG_REPORT_CHAT_ID = process.env.TELEGRAM_REPORT_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
 
+// Usernames whose messages are NEVER classified as issue/feedback (admins, mods, staff)
+const STAFF_USERNAMES = new Set(
+  (process.env.EXCLUDED_USERNAMES || "")
+    .split(",").map(u => u.trim().replace(/^@/, "").toLowerCase()).filter(Boolean)
+);
+
 // Groups to MONITOR only — never the report chat
 const TG_MONITOR_1 = process.env.TELEGRAM_CHAT_ID;
 const TG_MONITOR_2 = process.env.TELEGRAM_CHAT_ID_2;
@@ -461,7 +467,12 @@ async function trackTelegramMessage(msg) {
     : (msg.chat?.title || community);
 
   const { score, label } = analyzeSentiment(stripped);
-  const category         = await classifyMessageAI(stripped);
+  const senderUsername   = (msg.from?.username || "").toLowerCase();
+  const isStaff          = senderUsername && STAFF_USERNAMES.has(senderUsername);
+  const category         = isStaff ? "general" : await classifyMessageAI(stripped);
+  if (isStaff && category !== "general") {
+    console.log(`👤 Staff @${senderUsername} — forced category to general`);
+  }
 
   const payload = {
     message_id:   String(msg.message_id),

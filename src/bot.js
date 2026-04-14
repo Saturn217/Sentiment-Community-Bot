@@ -1,6 +1,6 @@
 if (process.env.NODE_ENV !== "production") require("dotenv").config();
 
-const { Client, GatewayIntentBits, REST, Routes, Collection, EmbedBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, Collection, EmbedBuilder, PermissionFlagsBits } = require("discord.js");
 const http  = require("http");
 const fs    = require("fs");
 const path  = require("path");
@@ -247,7 +247,9 @@ client.on("messageCreate", async (message) => {
   }
 
   const { score, label } = analyzeSentiment(stripped);
-  const category         = await classifyMessageAI(stripped);
+  // Admins/mods (anyone with ManageMessages) are never classified as issue/feedback
+  const isStaff = message.member?.permissions?.has(PermissionFlagsBits.ManageMessages) ?? false;
+  const category = isStaff ? "general" : await classifyMessageAI(stripped);
   const community        = COMMUNITY_MAP[message.guild?.id] || "discord_main";
 
   const payload = {

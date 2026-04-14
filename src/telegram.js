@@ -5,6 +5,7 @@ const {
   getCommunityBreakdown, insertSentiment, deleteByMessageId, cleanOldRecords,
   getCategorySummary, deleteAllByUser, deleteAllByUsername, findByUsername,
   getConversationHistory, saveConversationTurn, clearConversationHistory,
+  getWeeklyVolume,
 } = require("./database");
 const { rescheduleDailyCron } = require("./scheduler");
 const { buildTelegramReport, buildWeeklyDigestTelegram } = require("./reporter");
@@ -642,6 +643,43 @@ async function handleCommand(msg) {
       }).join("\n\n");
       await sendMessage(chatId, `💡 *Feedback — Last ${days} Day${days > 1 ? "s" : ""}* (${feedback.length} found)\n\n${feedbackText}`);
 
+    } else if (text.startsWith("/volume")) {
+      const { thisWeek, lastWeek, totals } = await getWeeklyVolume();
+      if (!totals.length) return sendMessage(chatId, "📭 No message data yet.");
+
+      const now = new Date();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+      const mondayStr = monday.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+      let msg = `📬 *Weekly Message Volume*\nWeek from ${mondayStr}\n\n`;
+
+      for (const total of totals) {
+        const comm = total.community;
+        const thisTotal = total.this_week_total ?? 0;
+        const lastTotal = total.last_week_total ?? 0;
+        const delta = lastTotal > 0 ? (((thisTotal - lastTotal) / lastTotal) * 100).toFixed(0) : null;
+        const arrow = thisTotal > lastTotal ? "📈" : thisTotal < lastTotal ? "📉" : "➡️";
+
+        msg += `*${comm}*\n`;
+        msg += `Total this week: *${thisTotal}* ${arrow}`;
+        if (delta !== null) msg += ` (${delta > 0 ? "+" : ""}${delta}% vs last week)`;
+        msg += "\n";
+
+        const commLastWeek = lastWeek.filter(r => r.community === comm);
+        const commThisWeek = thisWeek.filter(r => r.community === comm);
+
+        if (commLastWeek.length) {
+          msg += `_Last week:_\n` + commLastWeek.map(r => `  ${r.day_label}: ${r.message_count} msgs`).join("\n") + "\n";
+        }
+        if (commThisWeek.length) {
+          msg += `_This week so far:_\n` + commThisWeek.map(r => `  ${r.day_label}: ${r.message_count} msgs`).join("\n") + "\n";
+        }
+        msg += "\n";
+      }
+
+      await sendMessage(chatId, msg);
+
     } else if (text.startsWith("/communities")) {
       const breakdown = await getCommunityBreakdown(7);
       if (!breakdown.length) return sendMessage(chatId, "📭 No community data yet.");
@@ -850,7 +888,8 @@ async function handleCommand(msg) {
         `/channels \\[days\\] — Per\\-channel breakdown\n` +
         `/issues \\[days\\] — Recent issues\n` +
         `/feedback \\[days\\] — Recent feedback\n` +
-        `/communities — All communities overview\n\n` +
+        `/communities — All communities overview\n` +
+        `/volume — Weekly message volume per community \\(Mon→Mon\\)\n\n` +
         `*🔧 Admin Commands:*\n` +
         `/tgtrack \\[issue|feedback\\] \\[text\\]\n` +
         `/tgdelete \\[id\\]\n` +

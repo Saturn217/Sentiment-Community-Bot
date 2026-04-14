@@ -2,6 +2,7 @@ const { SlashCommandBuilder, EmbedBuilder, MessageFlags, PermissionFlagsBits } =
 const {
   getSummary, getTrend, getChannelBreakdown, getRecentIssues, getRecentFeedback,
   getCustomKeywords, addCustomKeyword, removeCustomKeyword, deleteByMessageId, cleanOldRecords,
+  getWeeklyVolume,
 } = require("./database");
 const { buildDailyReport, buildWeeklyDigest } = require("./reporter");
 const { getAllKeywords, loadCustomKeywords }   = require("./classifier");
@@ -462,6 +463,61 @@ const commands = [
         `✅ Manually tracked as **${category}**:\n` +
         `${catEmoji} **${username}**: ${text.slice(0, 200)}${text.length > 200 ? "..." : ""}`
       );
+    },
+  },
+
+  // ── /volume — weekly message volume per community ────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName("volume")
+      .setDescription("Daily message volume per community — current week vs last week"),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const { thisWeek, lastWeek, totals } = await getWeeklyVolume();
+
+      // Group daily rows by community
+      const byComm = {};
+      for (const row of [...lastWeek, ...thisWeek]) {
+        if (!byComm[row.community]) byComm[row.community] = { thisWeek: [], lastWeek: [] };
+      }
+      for (const row of lastWeek) byComm[row.community].lastWeek.push(row);
+      for (const row of thisWeek) byComm[row.community].thisWeek.push(row);
+
+      const fields = [];
+
+      for (const [comm, data] of Object.entries(byComm)) {
+        const total = totals.find(t => t.community === comm);
+        const thisTotal = total?.this_week_total ?? 0;
+        const lastTotal = total?.last_week_total ?? 0;
+        const delta     = lastTotal > 0 ? (((thisTotal - lastTotal) / lastTotal) * 100).toFixed(0) : "n/a";
+        const arrow     = thisTotal > lastTotal ? "📈" : thisTotal < lastTotal ? "📉" : "➡️";
+
+        let value = `**This week:** ${thisTotal} msgs ${arrow} ${delta !== "n/a" ? `(${delta > 0 ? "+" : ""}${delta}% vs last week)` : ""}\n`;
+
+        if (data.lastWeek.length) {
+          value += `\n_Last week:_\n` + data.lastWeek.map(r => `\`${r.day_label}\` ${r.message_count}`).join("\n");
+        }
+        if (data.thisWeek.length) {
+          value += `\n_This week so far:_\n` + data.thisWeek.map(r => `\`${r.day_label}\` ${r.message_count}`).join("\n");
+        }
+
+        fields.push({ name: `📊 ${comm}`, value: value || "No data", inline: false });
+      }
+
+      if (!fields.length) return interaction.editReply("📭 No message data yet.");
+
+      const now = new Date();
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7)); // last Monday
+
+      return interaction.editReply({ embeds: [
+        new EmbedBuilder()
+          .setTitle("📬 Weekly Message Volume by Community")
+          .setDescription(`Week starting **${weekStart.toLocaleDateString("en-US", { month: "short", day: "numeric" })}** · All platforms combined`)
+          .addFields(fields)
+          .setColor(0x5865f2)
+          .setTimestamp()
+      ]});
     },
   },
 

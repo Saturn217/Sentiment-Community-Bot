@@ -381,6 +381,50 @@ async function getWeekOverWeekComparison() {
   return rows[0];
 }
 
+// ─── Weekly Volume (Mon → Sun per community) ─────────────────────────────────
+async function getWeeklyVolume() {
+  // Current ISO week: Monday 00:00 UTC → now
+  const { rows: thisWeek } = await pool.query(`
+    SELECT
+      community, platform,
+      TO_CHAR(DATE(timestamp), 'Dy DD Mon') AS day_label,
+      DATE(timestamp)                        AS date,
+      COUNT(*)::int                          AS message_count
+    FROM sentiment
+    WHERE timestamp >= date_trunc('week', NOW())
+    GROUP BY community, platform, DATE(timestamp)
+    ORDER BY DATE(timestamp) ASC, community
+  `);
+
+  // Previous ISO week: last Mon 00:00 UTC → last Sun 23:59 UTC
+  const { rows: lastWeek } = await pool.query(`
+    SELECT
+      community, platform,
+      TO_CHAR(DATE(timestamp), 'Dy DD Mon') AS day_label,
+      DATE(timestamp)                        AS date,
+      COUNT(*)::int                          AS message_count
+    FROM sentiment
+    WHERE timestamp >= date_trunc('week', NOW() - INTERVAL '7 days')
+      AND timestamp <  date_trunc('week', NOW())
+    GROUP BY community, platform, DATE(timestamp)
+    ORDER BY DATE(timestamp) ASC, community
+  `);
+
+  // Week totals per community
+  const { rows: totals } = await pool.query(`
+    SELECT community, platform,
+      SUM(CASE WHEN timestamp >= date_trunc('week', NOW()) THEN 1 ELSE 0 END)::int              AS this_week_total,
+      SUM(CASE WHEN timestamp >= date_trunc('week', NOW() - INTERVAL '7 days')
+               AND timestamp <  date_trunc('week', NOW()) THEN 1 ELSE 0 END)::int               AS last_week_total
+    FROM sentiment
+    WHERE timestamp >= date_trunc('week', NOW() - INTERVAL '7 days')
+    GROUP BY community, platform
+    ORDER BY community
+  `);
+
+  return { thisWeek, lastWeek, totals };
+}
+
 // ─── Alert Detection ──────────────────────────────────────────────────────────
 async function detectSentimentSpike() {
   const { rows } = await pool.query(`
@@ -417,7 +461,7 @@ module.exports = {
   getSummary, getTrend, getChannelBreakdown, getTopUsers, getTodayCount,
   getCommunityBreakdown, getCategorySummary, getRecentIssues, getRecentFeedback, getCategoryTrend,
   getCustomKeywords, addCustomKeyword, removeCustomKeyword,
-  getWeeklyStats, getWeeklyTopUsers, getWeeklyIssuesAndFeedback,
+  getWeeklyStats, getWeeklyTopUsers, getWeeklyIssuesAndFeedback, getWeeklyVolume,
   getDashboardData,
   getConversationHistory, saveConversationTurn, clearConversationHistory,
   getSetting, setSetting,

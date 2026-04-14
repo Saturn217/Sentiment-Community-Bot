@@ -914,11 +914,14 @@ async function poll() {
       }
     }
   } catch (err) {
-    const isNormal = err.message?.includes("socket hang up") ||
-                     err.message?.includes("ECONNRESET") ||
-                     err.message?.includes("ETIMEDOUT");
+    const isConflict = err.message?.includes("Conflict");
+    const isNormal   = isConflict ||
+                       err.message?.includes("socket hang up") ||
+                       err.message?.includes("ECONNRESET") ||
+                       err.message?.includes("ETIMEDOUT");
     if (!isNormal) console.error("❌ Telegram poll error:", err.message);
-    await new Promise(r => setTimeout(r, 3000));
+    // Conflict = two instances overlapping during deploy — wait longer for old instance to exit
+    await new Promise(r => setTimeout(r, isConflict ? 8000 : 3000));
   }
   setImmediate(poll);
 }

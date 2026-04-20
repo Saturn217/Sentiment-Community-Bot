@@ -307,8 +307,13 @@ async function getWeeklyIssuesAndFeedback() {
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 async function getDashboardData() {
-  const [dailyTrend, communityBreakdown, recentIssues, recentFeedback, topUsers, categorySummary] =
-    await Promise.all([getTrend(30), getCommunityBreakdown(30), getRecentIssues(7,20), getRecentFeedback(7,20), getTopUsers(7), getCategorySummary(7)]);
+  const [dailyTrend, communityBreakdown, recentIssues, recentFeedback, topUsers, categorySummary, dailyVolume] =
+    await Promise.all([
+      getTrend(30), getCommunityBreakdown(30),
+      getRecentIssues(7,20), getRecentFeedback(7,20),
+      getTopUsers(7), getCategorySummary(7),
+      getDailyVolumeByPlatform(30),
+    ]);
 
   const { rows: stats } = await pool.query(`
     SELECT COUNT(*)::int AS total_messages, AVG(score)::float AS avg_score,
@@ -319,7 +324,7 @@ async function getDashboardData() {
       SUM(CASE WHEN category='feedback' THEN 1 ELSE 0 END)::int AS feedback_count
     FROM sentiment WHERE timestamp >= NOW() - INTERVAL '30 days'
   `);
-  return { totalStats: stats[0], dailyTrend, communityBreakdown, recentIssues, recentFeedback, topUsers, categorySummary };
+  return { totalStats: stats[0], dailyTrend, communityBreakdown, recentIssues, recentFeedback, topUsers, categorySummary, dailyVolume };
 }
 
 // ─── Conversation History ─────────────────────────────────────────────────────

@@ -137,6 +137,11 @@
 </div>
 
 <script>
+// ── Config ──────────────────────────────────────────────────────────────────
+// Update this to your Render service URL if you rename it
+const API_URL = "https://new-sentiment-agent.onrender.com/api/dashboard";
+// ────────────────────────────────────────────────────────────────────────────
+
 let trendChart = null, volumeChart = null;
 
 function moodLabel(score) {
@@ -345,7 +350,7 @@ function renderUsers(users) {
 
 async function loadData() {
   try {
-    const res  = await fetch("/api/dashboard");
+    const res  = await fetch(API_URL);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 

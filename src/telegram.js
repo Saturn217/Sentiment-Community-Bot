@@ -984,7 +984,10 @@ async function sendTelegramDailyReport() {
   if (!TG_REPORT_CHAT_ID) { console.warn("⚠️  No TELEGRAM_REPORT_CHAT_ID set — skipping."); return; }
   try {
     const parts = await buildTelegramReport();
-    for (const part of parts) await sendMessage(TG_REPORT_CHAT_ID, part);
+    for (const part of parts) {
+      // Send as plain text — no parse_mode so user content never breaks parsing
+      await tgRequest("sendMessage", { chat_id: TG_REPORT_CHAT_ID, text: part });
+    }
     console.log("✅ Telegram daily report sent.");
   } catch (err) { console.error("❌ Failed to send Telegram report:", err.message); }
 }

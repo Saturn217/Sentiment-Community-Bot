@@ -190,116 +190,119 @@ async function buildTelegramReport() {
   const feedbackCount = categorySummary?.find(c => c.category === "feedback")?.count || 0;
   const communitySummary = buildCommunitySummary(positive, negative, neutral, count, issueCount, feedbackCount);
 
-  // Escape * and _ in user content to prevent broken Markdown
-  const esc = str => (str || "").replace(/([*_`[])/g, "\\$1");
+  // Plain text — no Markdown markers so user content never breaks parsing
+  const clean = str => (str || "").replace(/\n+/g, " ").trim();
 
-  // Breakdown bars
-  const pct    = n  => count > 0 ? Math.round((n / count) * 100) : 0;
+  const D = "━━━━━━━━━━━━━━━━━━━━";
+  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+
+  // Breakdown bars (plain text)
+  const pct     = n => count > 0 ? Math.round((n / count) * 100) : 0;
   const miniBar = (n, emoji) => {
     const p = pct(n); const f = Math.round(p / 10);
-    return `${emoji} ${"█".repeat(f)}${"░".repeat(10 - f)} *${p}%* _(${n} msgs)_`;
+    return `${emoji} ${"█".repeat(f)}${"░".repeat(10 - f)} ${p}% (${n} msgs)`;
   };
   const breakdownText = count > 0
     ? `${miniBar(positive, "🟢")}\n${miniBar(neutral, "🟡")}\n${miniBar(negative, "🔴")}`
-    : "_No messages tracked today._";
+    : "No messages tracked today.";
 
-  // 7-day trend (last 5 days)
+  // 7-day trend
   const trendLines = trend.slice(-5).map(({ date, avg_score, message_count }) => {
     const arrow = avg_score > 0.05 ? "📈" : avg_score < -0.05 ? "📉" : "➡️";
-    return `${arrow} *${formatDate(date)}* — ${scoreToWords(avg_score)} · ${message_count} msgs`;
-  }).join("\n") || "_Not enough data yet._";
+    return `${arrow} ${formatDate(date)} — ${scoreToWords(avg_score)} · ${message_count} msgs`;
+  }).join("\n") || "Not enough data yet.";
 
   // Communities
   const communityLines = communities.length > 0
     ? communities.map(({ community, platform, message_count, avg_score }) => {
         const plat = platform === "telegram" ? "📱" : "💬";
         const mood = avg_score > 0.05 ? "🟢" : avg_score < -0.05 ? "🔴" : "🟡";
-        return `${mood}${plat} *${esc(community)}*\n     ${scoreToWords(avg_score)} · ${message_count} msgs`;
+        return `${mood}${plat} ${community}\n     ${scoreToWords(avg_score)} · ${message_count} msgs`;
       }).join("\n\n")
-    : "_No community data yet._";
+    : "No community data yet.";
+
+  // vs Last Week
+  const wowText = (() => {
+    if (!wow) return "Comparison data not available yet.";
+    const wowDelta = n => {
+      if (!n.last) return n.this > 0 ? `↑ +${n.this} (new)` : "→ no data";
+      const pct2 = Math.round(((n.this - n.last) / n.last) * 100);
+      const dir  = pct2 > 0 ? "↑" : pct2 < 0 ? "↓" : "→";
+      return `${dir} ${pct2 > 0 ? "+" : ""}${pct2}% (${n.last} → ${n.this})`;
+    };
+    const scoreDir = (a, b) => {
+      if (b === null || b === undefined) return "→ no prior data";
+      const d = (a||0) - (b||0);
+      return `${d > 0.01 ? "↑" : d < -0.01 ? "↓" : "→"} ${d > 0 ? "+" : ""}${d.toFixed(3)}`;
+    };
+    return [
+      `💬 Messages: ${wow.this_week} — ${wowDelta({ this: wow.this_week||0, last: wow.last_week||0 })}`,
+      `😊 Mood: ${scoreToWords(wow.this_score||0)} — ${scoreDir(wow.this_score, wow.last_score)}`,
+      `🐛 Issues: ${wow.this_issues} — ${wowDelta({ this: wow.this_issues||0, last: wow.last_issues||0 })}`,
+    ].join("\n");
+  })();
 
   // Issues
   const issueLines = recentIssues.length > 0
     ? recentIssues.map(({ username, community, message_text }) => {
-        const preview = esc((message_text || "").slice(0, 150));
+        const preview = clean(message_text).slice(0, 150);
         const tail    = (message_text || "").length > 150 ? "..." : "";
-        return `🔴 *${esc(username)}* · _${esc(community)}_\n_"${preview}${tail}"_`;
+        return `🔴 ${username} · ${community}\n"${preview}${tail}"`;
       }).join("\n\n")
-    : "✅ _No issues reported today_";
+    : "✅ No issues reported today";
 
   // Feedback
   const feedbackLines = recentFeedback.length > 0
     ? recentFeedback.map(({ username, community, message_text }) => {
-        const preview = esc((message_text || "").slice(0, 150));
+        const preview = clean(message_text).slice(0, 150);
         const tail    = (message_text || "").length > 150 ? "..." : "";
-        return `💬 *${esc(username)}* · _${esc(community)}_\n_"${preview}${tail}"_`;
+        return `💬 ${username} · ${community}\n"${preview}${tail}"`;
       }).join("\n\n")
-    : "📭 _No feedback submitted today_";
+    : "📭 No feedback submitted today";
 
-  const today = new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-  const D = "━━━━━━━━━━━━━━━━━━━━";
-
-  // ── Part 1: Overview + Stats ──────────────────────────────────────────────
+  // ── Part 1 ────────────────────────────────────────────────────────────────
   const part1 = [
-    `${moodEmoji} *Daily Sentiment Report*`,
-    `_${today}_`,
+    `${moodEmoji} Daily Sentiment Report`,
+    today,
     ``,
-    `_${communitySummary}_`,
+    communitySummary,
     ``,
-    `*Overall Mood:* ${scoreToWords(overallScore)} · *${count || 0}* messages`,
+    `Overall Mood: ${scoreToWords(overallScore)} · ${count || 0} messages`,
     ``,
     D,
-    `🌐 *Communities Today*`,
+    `🌐 Communities Today`,
     ``,
     communityLines,
     ``,
     D,
-    `📊 *Sentiment Breakdown*`,
+    `📊 Sentiment Breakdown`,
     ``,
     breakdownText,
     ``,
     D,
-    `📅 *7-Day Trend*`,
+    `📅 7-Day Trend`,
     ``,
     trendLines,
     ``,
     D,
-    `📈 *vs Last Week*`,
+    `📈 vs Last Week`,
     ``,
-    (() => {
-      if (!wow) return "_Comparison data not available yet._";
-      const wowDelta  = n => {
-        if (!n.last) return n.this > 0 ? `↑ +${n.this} (new)` : "→ no data";
-        const pct = Math.round(((n.this - n.last) / n.last) * 100);
-        const dir = pct > 0 ? "↑" : pct < 0 ? "↓" : "→";
-        return `${dir} ${pct > 0 ? "+" : ""}${pct}% (${n.last} → ${n.this})`;
-      };
-      const scoreDir = (a, b) => {
-        if (b === null || b === undefined) return "→ no prior data";
-        const d = (a||0) - (b||0);
-        return `${d > 0.01 ? "↑" : d < -0.01 ? "↓" : "→"} ${d > 0 ? "+" : ""}${d.toFixed(3)}`;
-      };
-      return [
-        `💬 Messages: *${wow.this_week}* — ${wowDelta({ this: wow.this_week||0, last: wow.last_week||0 })}`,
-        `😊 Mood: *${scoreToWords(wow.this_score||0)}* — ${scoreDir(wow.this_score, wow.last_score)}`,
-        `🐛 Issues: *${wow.this_issues}* — ${wowDelta({ this: wow.this_issues||0, last: wow.last_issues||0 })}`,
-      ].join("\n");
-    })(),
+    wowText,
   ].join("\n");
 
-  // ── Part 2: Issues + Feedback ─────────────────────────────────────────────
+  // ── Part 2 ────────────────────────────────────────────────────────────────
   const part2 = [
-    `🐛 *Issues Today* _(${issueCount})_`,
+    `🐛 Issues Today (${issueCount})`,
     ``,
     issueLines,
     ``,
     D,
-    `💡 *Feedback Today* _(${feedbackCount})_`,
+    `💡 Feedback Today (${feedbackCount})`,
     ``,
     feedbackLines,
     ``,
     D,
-    `_Sentiment Bot · Daily Report_`,
+    `Sentiment Bot · Daily Report`,
   ].join("\n");
 
   return [part1, part2];

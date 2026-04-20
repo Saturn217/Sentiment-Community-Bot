@@ -4,6 +4,7 @@ const {
   getCustomKeywords, addCustomKeyword, removeCustomKeyword, deleteByMessageId, cleanOldRecords,
   getWeeklyVolume,
 } = require("./database");
+const { buildVolumeChartUrl } = require("./charts");
 const { buildDailyReport, buildWeeklyDigest } = require("./reporter");
 const { getAllKeywords, loadCustomKeywords }   = require("./classifier");
 
@@ -463,6 +464,30 @@ const commands = [
         `✅ Manually tracked as **${category}**:\n` +
         `${catEmoji} **${username}**: ${text.slice(0, 200)}${text.length > 200 ? "..." : ""}`
       );
+    },
+  },
+
+  // ── /chart — daily message volume chart ──────────────────────────────────
+  {
+    data: new SlashCommandBuilder()
+      .setName("chart")
+      .setDescription("Generate a daily message volume chart across all communities")
+      .addIntegerOption(opt =>
+        opt.setName("days").setDescription("Days to show (default: 30, max: 90)").setMinValue(7).setMaxValue(90).setRequired(false)
+      ),
+    async execute(interaction) {
+      await interaction.deferReply();
+      const days     = interaction.options.getInteger("days") || 30;
+      const chartUrl = await buildVolumeChartUrl(days);
+      if (!chartUrl) return interaction.editReply("📭 Not enough data to generate a chart yet.");
+      return interaction.editReply({ embeds: [
+        new EmbedBuilder()
+          .setTitle(`📊 Daily Message Volume — Last ${days} Days`)
+          .setDescription("All communities and platforms combined")
+          .setImage(chartUrl)
+          .setColor(0x5865f2)
+          .setTimestamp()
+      ]});
     },
   },
 

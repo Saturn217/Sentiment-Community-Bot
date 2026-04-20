@@ -9,6 +9,7 @@ const {
 } = require("./database");
 const { rescheduleDailyCron } = require("./scheduler");
 const { buildTelegramReport, buildWeeklyDigestTelegram } = require("./reporter");
+const { buildVolumeChartUrl, fetchImageBuffer } = require("./charts");
 const { analyzeSentiment } = require("./sentiment");
 const { classifyMessageAI, isSpam } = require("./classifier");
 
@@ -643,6 +644,49 @@ async function handleCommand(msg) {
       }).join("\n\n");
       await sendMessage(chatId, `💡 *Feedback — Last ${days} Day${days > 1 ? "s" : ""}* (${feedback.length} found)\n\n${feedbackText}`);
 
+    } else if (text.startsWith("/chart")) {
+      const days = parseInt(text.split(" ")[1]) || 30;
+      await tgRequest("sendChatAction", { chat_id: chatId, action: "upload_photo" });
+      try {
+        const chartUrl = await buildVolumeChartUrl(Math.min(days, 90));
+        if (!chartUrl) return sendMessage(chatId, "📭 Not enough data to generate a chart yet.");
+
+        // Fetch image buffer and send as photo upload (more reliable than URL method)
+        const imgBuffer = await fetchImageBuffer(chartUrl);
+        const boundary  = "----TGBoundary" + Date.now();
+        const caption   = `📊 Daily Message Volume — Last ${days} Days\nAll communities combined`;
+
+        // Build multipart/form-data manually
+        const namePart    = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n`);
+        const captionPart = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="caption"\r\n\r\n${caption}\r\n`);
+        const filePart    = Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="photo"; filename="chart.png"\r\nContent-Type: image/png\r\n\r\n`);
+        const endPart     = Buffer.from(`\r\n--${boundary}--\r\n`);
+        const body        = Buffer.concat([namePart, captionPart, filePart, imgBuffer, endPart]);
+
+        await new Promise((resolve, reject) => {
+          const req = https.request({
+            hostname: "api.telegram.org",
+            path:     `/bot${TG_TOKEN}/sendPhoto`,
+            method:   "POST",
+            headers:  { "Content-Type": `multipart/form-data; boundary=${boundary}`, "Content-Length": body.length },
+          }, res => {
+            let raw = "";
+            res.on("data", c => raw += c);
+            res.on("end",  () => {
+              const parsed = JSON.parse(raw);
+              if (!parsed.ok) reject(new Error(parsed.description));
+              else resolve(parsed);
+            });
+          });
+          req.on("error", reject);
+          req.write(body);
+          req.end();
+        });
+      } catch (err) {
+        console.error("❌ Chart error:", err.message);
+        await sendMessage(chatId, "⚠️ Failed to generate chart. Try again in a moment.");
+      }
+
     } else if (text.startsWith("/volume")) {
       const { thisWeek, lastWeek, totals } = await getWeeklyVolume();
       if (!totals.length) return sendMessage(chatId, "📭 No message data yet.");
@@ -889,7 +933,8 @@ async function handleCommand(msg) {
         `/issues \\[days\\] — Recent issues\n` +
         `/feedback \\[days\\] — Recent feedback\n` +
         `/communities — All communities overview\n` +
-        `/volume — Weekly message volume per community \\(Mon→Mon\\)\n\n` +
+        `/volume — Weekly message volume per community \\(Mon→Mon\\)\n` +
+        `/chart \\[days\\] — Daily message chart image \\(default: 30 days\\)\n\n` +
         `*🔧 Admin Commands:*\n` +
         `/tgtrack \\[issue|feedback\\] \\[text\\]\n` +
         `/tgdelete \\[id\\]\n` +

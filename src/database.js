@@ -425,6 +425,22 @@ async function getWeeklyVolume() {
   return { thisWeek, lastWeek, totals };
 }
 
+// ─── Daily Volume by Community (for charts) ───────────────────────────────────
+async function getDailyVolumeByPlatform(days = 30) {
+  const { rows } = await pool.query(`
+    SELECT
+      DATE(timestamp)  AS date,
+      community,
+      platform,
+      COUNT(*)::int    AS message_count
+    FROM sentiment
+    WHERE timestamp >= NOW() - INTERVAL '${days} days'
+    GROUP BY DATE(timestamp), community, platform
+    ORDER BY date ASC
+  `);
+  return rows;
+}
+
 // ─── Alert Detection ──────────────────────────────────────────────────────────
 async function detectSentimentSpike() {
   const { rows } = await pool.query(`
@@ -461,7 +477,7 @@ module.exports = {
   getSummary, getTrend, getChannelBreakdown, getTopUsers, getTodayCount,
   getCommunityBreakdown, getCategorySummary, getRecentIssues, getRecentFeedback, getCategoryTrend,
   getCustomKeywords, addCustomKeyword, removeCustomKeyword,
-  getWeeklyStats, getWeeklyTopUsers, getWeeklyIssuesAndFeedback, getWeeklyVolume,
+  getWeeklyStats, getWeeklyTopUsers, getWeeklyIssuesAndFeedback, getWeeklyVolume, getDailyVolumeByPlatform,
   getDashboardData,
   getConversationHistory, saveConversationTurn, clearConversationHistory,
   getSetting, setSetting,

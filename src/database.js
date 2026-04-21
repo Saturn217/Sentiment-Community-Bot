@@ -118,12 +118,37 @@ async function deleteAllByUser(username, userId) {
 }
 
 async function deleteAllByUsername(username) {
-  // Deletes ALL records matching username (case-insensitive, partial match) — used by /tgpurge
+  // Deletes ALL records matching username (case-insensitive) — used by /tgpurge
   const { rowCount } = await pool.query(
     `DELETE FROM sentiment WHERE username ILIKE $1`,
     [username]
   );
   return rowCount;
+}
+
+async function deleteAllByUserId(userId) {
+  // Deletes ALL records for a Telegram user_id — most reliable when spammer has no @username
+  const { rowCount } = await pool.query(
+    `DELETE FROM sentiment WHERE user_id = $1`,
+    [String(userId)]
+  );
+  return rowCount;
+}
+
+async function getHighVolumeUsers(minutes = 60, threshold = 15) {
+  // Find users with unusually high message counts — useful for spotting spammers after the fact
+  const { rows } = await pool.query(`
+    SELECT user_id, username, platform, community,
+      COUNT(*)::int AS msg_count,
+      MAX(timestamp) AS last_seen
+    FROM sentiment
+    WHERE timestamp >= NOW() - INTERVAL '${minutes} minutes'
+    GROUP BY user_id, username, platform, community
+    HAVING COUNT(*) >= ${threshold}
+    ORDER BY msg_count DESC
+    LIMIT 15
+  `);
+  return rows;
 }
 
 async function findByUsername(username) {
@@ -478,7 +503,7 @@ async function detectIssueSurge() {
 }
 
 module.exports = {
-  initDB, insertSentiment, deleteByMessageId, deleteByUsername, deleteAllByUser, deleteAllByUsername, findByUsername, cleanOldRecords,
+  initDB, insertSentiment, deleteByMessageId, deleteByUsername, deleteAllByUser, deleteAllByUsername, deleteAllByUserId, findByUsername, getHighVolumeUsers, cleanOldRecords,
   getSummary, getTrend, getChannelBreakdown, getTopUsers, getTodayCount,
   getCommunityBreakdown, getCategorySummary, getRecentIssues, getRecentFeedback, getCategoryTrend,
   getCustomKeywords, addCustomKeyword, removeCustomKeyword,

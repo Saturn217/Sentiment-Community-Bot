@@ -3,7 +3,8 @@ const Anthropic = require("@anthropic-ai/sdk");
 const {
   getSummary, getTrend, getChannelBreakdown, getRecentIssues, getRecentFeedback,
   getCommunityBreakdown, insertSentiment, deleteByMessageId, cleanOldRecords,
-  getCategorySummary, deleteAllByUser, deleteAllByUsername, findByUsername,
+  getCategorySummary, deleteAllByUser, deleteAllByUsername, deleteAllByUserId,
+  findByUsername, getHighVolumeUsers,
   getConversationHistory, saveConversationTurn, clearConversationHistory,
   getWeeklyVolume,
 } = require("./database");
@@ -34,6 +35,15 @@ const CHAT_COMMUNITY_MAP = {
 };
 
 let offset = 0;
+
+// ─── Spam Rate Limiter ────────────────────────────────────────────────────────
+// Tracks per-user message timestamps in a rolling 5-minute window.
+// If a user exceeds RATE_LIMIT_MAX in that window, the current message is
+// skipped — but the check resets naturally as older timestamps age out.
+// No permanent session bans, so real users who burst then stop are fine.
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;  // 5-minute rolling window
+const RATE_LIMIT_MAX       = 20;              // real users rarely hit this; spambots easily exceed it
+const userMsgTimes  = new Map();              // userId → timestamp[]
 
 // ─── Claude Agent Setup ───────────────────────────────────────────────────────
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -434,9 +444,12 @@ async function sendMessage(chat_id, text) {
   }
 }
 
-// ─── 30-Second Delay Queue ────────────────────────────────────────────────────
-// Hold messages 30s before saving — admin delete in that window = never tracked
-const TRACK_DELAY_MS = 30 * 1000;
+// ─── Delay Queue ─────────────────────────────────────────────────────────────
+// Hold messages 90s before saving to DB. Rose bot (and other auto-moderators)
+// typically delete spam within ~60s — giving a 90s buffer means most spam is
+// caught and deleted before it ever reaches the database.
+// Admin can also cancel a specific pending save with /tgdelete <id>.
+const TRACK_DELAY_MS = 90 * 1000;
 const pendingTgMsgs  = new Map(); // "chatId:messageId" → timeout
 
 async function trackTelegramMessage(msg) {
@@ -449,7 +462,20 @@ async function trackTelegramMessage(msg) {
   const stripped = text.replace(/https?:\/\/\S+/g, "").trim();
   if (stripped.length < 5) return;
 
-  // Skip spam messages entirely — never track them
+  // ── Rate-limit check — flood spam (too many messages in a rolling 5-min window) ──
+  const userId = String(msg.from?.id || "unknown");
+  const now    = Date.now();
+  const times  = userMsgTimes.get(userId) || [];
+  const recent = times.filter(t => now - t < RATE_LIMIT_WINDOW_MS);
+  recent.push(now);
+  userMsgTimes.set(userId, recent);
+  if (recent.length > RATE_LIMIT_MAX) {
+    // Skip this message only — no permanent ban, resets naturally as old timestamps age out
+    console.log(`🚫 Flood spam: user ${msg.from?.username || userId} sent ${recent.length} msgs in 5min — skipping`);
+    return;
+  }
+
+  // ── Content-based spam filter ─────────────────────────────────────────────
   if (isSpam(stripped)) {
     console.log(`🚫 Spam detected from ${msg.from?.username || "unknown"}, skipping`);
     return;
@@ -845,12 +871,42 @@ async function handleCommand(msg) {
       const username = text.split(" ").slice(1).join(" ").trim();
       if (!username) {
         return sendMessage(chatId,
-          `⚠️ Usage: \`/tgpurge <username>\`\n\nDeletes *all* tracked records for a user (any category, any age). Use after banning someone.`
+          `⚠️ Usage: \`/tgpurge <username>\`\n\nDeletes *all* tracked records for a user (any category, any age). Use after banning someone.\n\nIf the spammer has no @username, use \`/tgpurgeid <user_id>\` instead.`
         );
       }
       const deleted = await deleteAllByUsername(username);
-      if (!deleted) return sendMessage(chatId, `📭 No records found for *${username}*.`);
+      if (!deleted) return sendMessage(chatId, `📭 No records found for *${username}*.\n\nTip: use /tgfind to search, or /tgspammers to see high-volume users.`);
       await sendMessage(chatId, `🗑️ Purged *${deleted}* record${deleted !== 1 ? "s" : ""} for *${username}* \\(all categories\\).`);
+
+    } else if (text.startsWith("/tgpurgeid")) {
+      const userId = text.split(" ")[1]?.trim();
+      if (!userId) {
+        return sendMessage(chatId,
+          `⚠️ Usage: \`/tgpurgeid <user_id>\`\n\nDeletes all tracked records by Telegram user ID\\. Use this when a spammer has no @username\\.\n\nFind the ID via \`/tgspammers\` or \`/tgfind <name>\`.`
+        );
+      }
+      const deleted = await deleteAllByUserId(userId);
+      if (!deleted) return sendMessage(chatId, `📭 No records found for user ID \`${userId}\`.`);
+      await sendMessage(chatId, `🗑️ Purged *${deleted}* record${deleted !== 1 ? "s" : ""} for user ID \`${userId}\` \\(all categories\\).`);
+
+    } else if (text.startsWith("/tgspammers")) {
+      const parts    = text.split(" ");
+      const minutes  = parseInt(parts[1]) || 60;
+      const threshold = parseInt(parts[2]) || 15;
+      const spammers = await getHighVolumeUsers(minutes, threshold);
+      if (!spammers.length) {
+        return sendMessage(chatId, `✅ No high-volume users found in the last ${minutes} minutes \\(threshold: ${threshold} msgs\\).`);
+      }
+      const list = spammers.map((u, i) =>
+        `${i + 1}\\. *${u.username}* — *${u.msg_count} msgs*\n` +
+        `   ID: \`${u.user_id}\` · ${u.community}\n` +
+        `   Last seen: ${new Date(u.last_seen).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}\n` +
+        `   → \`/tgpurge ${u.username}\` or \`/tgpurgeid ${u.user_id}\``
+      ).join("\n\n");
+      await sendMessage(chatId,
+        `🚨 *High-Volume Users — Last ${minutes} min \\(≥${threshold} msgs\\)*\n\n${list}\n\n` +
+        `_Run the purge command next to remove them from all stats\\._`
+      );
 
     } else if (text.startsWith("/tgfind")) {
       const username = text.split(" ").slice(1).join(" ").trim();
@@ -938,8 +994,10 @@ async function handleCommand(msg) {
         `*🔧 Admin Commands:*\n` +
         `/tgtrack \\[issue|feedback\\] \\[text\\]\n` +
         `/tgdelete \\[id\\]\n` +
-        `/tgdeleteuser \\[username\\] \\[days\\] — Delete issue/feedback records\n` +
+        `/tgdeleteuser \\[username\\] \\[days\\] — Delete issue/feedback only\n` +
         `/tgpurge \\[username\\] — Delete ALL records \\(use after ban\\)\n` +
+        `/tgpurgeid \\[user\\_id\\] — Purge by Telegram ID \\(no @username needed\\)\n` +
+        `/tgspammers \\[minutes\\] \\[threshold\\] — Show high-volume users\n` +
         `/tgfind \\[username\\] — Search DB for user\n` +
         `/tgclean — Clean unverifiable records`
       );
